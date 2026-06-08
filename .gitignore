@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.env
+.venv
+env/
+venv/
+ENV/
+
+# 数据库
+*.db
+*.sqlite
+*.sqlite3
+storage/
+chroma/
+checkpoints/
+
+# 日志
+*.log
+logs/
+
+# 缓存
+cache/
+*.cache
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 其他
+.DS_Store
+Thumbs.db
+*.pdf
+*.docx
