@@ -89,6 +89,9 @@ class GoogleScholarTool(Tool):
             )
         
         query = str(tool_input.get("query", "")).strip()
+        # 查询优化：剥离冗余前缀、归一化
+        from tools.search.query_optimizer import QueryOptimizer
+        query = QueryOptimizer.optimize_for_search_static(query)
         limit = int(tool_input.get("limit", self.max_results))
         limit = min(limit, self.max_results)
         year_from = tool_input.get("year_from")
@@ -125,8 +128,16 @@ class GoogleScholarTool(Tool):
                             break
                         
                         try:
-                            # 年份过滤
-                            pub_year = pub.get("pub_year")
+                            # scholarly 1.x+ 返回 Publication 对象，不是 dict
+                            # 属性访问方式：pub.bib['title'] / pub.bib.get('year') / pub.pub_url
+                            bib = getattr(pub, 'bib', {}) or {}
+                            if not isinstance(bib, dict):
+                                bib = {}
+                            
+                            # 年份过滤（可能存在于 bib['year']、bib['pub_year'] 或直接属性）
+                            pub_year = str(bib.get('year') or bib.get('pub_year') or '')
+                            if not pub_year:
+                                pub_year = str(getattr(pub, 'year', '') or '')
                             if year_from and pub_year:
                                 try:
                                     if int(pub_year) < year_from:
@@ -134,21 +145,37 @@ class GoogleScholarTool(Tool):
                                 except (ValueError, TypeError):
                                     pass
                             
+                            # 提取标题
+                            title = bib.get('title', '') or str(getattr(pub, 'title', ''))
+                            
                             # 提取作者
-                            authors = pub.get("bib", {}).get("author", [])
-                            if isinstance(authors, str):
-                                authors = [a.strip() for a in authors.split(" and ")][:5]
-                            elif not isinstance(authors, list):
+                            authors_raw = bib.get('author', [])
+                            if isinstance(authors_raw, str):
+                                authors = [a.strip() for a in authors_raw.split(' and ')][:5]
+                            elif isinstance(authors_raw, list):
+                                authors = authors_raw[:5]
+                            else:
                                 authors = []
                             
+                            # 提取摘要
+                            abstract = bib.get('abstract', '') or ''
+                            abstract = str(abstract)[:300] if abstract else ''
+                            
+                            # 提取会议/期刊
+                            venue = bib.get('venue', '') or ''
+                            
+                            # 提取 URL
+                            url = getattr(pub, 'pub_url', '') or bib.get('url', '') or ''
+                            gs_url = getattr(pub, 'url_scholarbib', '') or ''
+                            
                             paper_info = {
-                                "title": pub.get("bib", {}).get("title", ""),
-                                "authors": authors[:5],
-                                "year": pub.get("pub_year", ""),
-                                "abstract": pub.get("bib", {}).get("abstract", "")[:300] if pub.get("bib", {}).get("abstract") else "",
-                                "venue": pub.get("bib", {}).get("venue", ""),
-                                "url": pub.get("pub_url", ""),
-                                "google_scholar_url": pub.get("url", "") if pub.get("url") else "",
+                                "title": title,
+                                "authors": authors,
+                                "year": pub_year,
+                                "abstract": abstract,
+                                "venue": venue,
+                                "url": url,
+                                "google_scholar_url": gs_url,
                             }
                             papers.append(paper_info)
                             count += 1

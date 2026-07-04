@@ -1,4 +1,5 @@
 # 作用：实现真实的 arXiv 论文搜索工具，调用 arxiv API 获取论文元数据，使用指数退避重试。
+import asyncio
 import json
 import time
 from typing import Any
@@ -20,6 +21,7 @@ class ArxivSearchTool(Tool):
         "properties": {
             "query": {"type": "string", "description": "Search query (topic, keywords, author)"},
             "limit": {"type": "integer", "description": "Maximum number of papers to return", "default": 5},
+            "year_from": {"type": "integer", "description": "Filter papers from this year (optional)"},
         },
         "required": ["query"],
     }
@@ -88,14 +90,24 @@ class ArxivSearchTool(Tool):
         """搜索 arXiv 论文，并返回论文元数据，带重试机制。
         
         Args:
-            tool_input: 包含 'query' 和可选的 'limit' 字段
+            tool_input: 包含 'query' 和可选的 'limit', 'year_from' 字段
             
         Returns:
             JSON 字符串，包含论文列表
         """
         query = str(tool_input.get("query", "")).strip()
+        # 查询优化：剥离冗余前缀、归一化
+        from tools.search.query_optimizer import QueryOptimizer
+        query = QueryOptimizer.optimize_for_search_static(query)
         limit = int(tool_input.get("limit", self.max_results))
         limit = min(limit, self.max_results)
+        year_from_raw = tool_input.get("year_from")
+        year_from = None
+        if year_from_raw is not None:
+            try:
+                year_from = int(str(year_from_raw).strip())
+            except (ValueError, TypeError):
+                year_from = None
 
         if not query:
             return json.dumps({"error": "Query cannot be empty"}, ensure_ascii=False)
@@ -121,6 +133,10 @@ class ArxivSearchTool(Tool):
 
                 papers = []
                 for entry in client.results(search):
+                    # 年份过滤：如果指定了 year_from，跳过更早的论文
+                    if year_from and entry.published.year < year_from:
+                        continue
+                    
                     paper_info = {
                         "arxiv_id": entry.entry_id.split("/abs/")[-1],
                         "title": entry.title,
@@ -163,3 +179,114 @@ class ArxivSearchTool(Tool):
             {"error": "Failed to search arXiv: Unknown error"},
             ensure_ascii=False
         )
+
+    async def async_run(self, tool_input: dict[str, Any]) -> str:
+        """纯异步搜索 arXiv 论文，直接调用 arXiv OAI-PMH API（aiohttp + XML 解析）。"""
+        import aiohttp
+        import urllib.parse
+        import xml.etree.ElementTree as ET
+
+        query = str(tool_input.get("query", "")).strip()
+        from tools.search.query_optimizer import QueryOptimizer
+        query = QueryOptimizer.optimize_for_search_static(query)
+        limit = int(tool_input.get("limit", self.max_results))
+        limit = min(limit, self.max_results)
+        year_from_raw = tool_input.get("year_from")
+        year_from = None
+        if year_from_raw is not None:
+            try:
+                year_from = int(str(year_from_raw).strip())
+            except (ValueError, TypeError):
+                year_from = None
+
+        if not query:
+            return json.dumps({"error": "Query cannot be empty"}, ensure_ascii=False)
+
+        # arXiv API query: all:word1+AND+all:word2
+        encoded_words = [urllib.parse.quote(w, safe='') for w in query.strip().split()]
+        search_query = "all:" + "+AND+all:".join(encoded_words) if encoded_words else ""
+
+        url = (f"http://export.arxiv.org/api/query"
+               f"?search_query={search_query}"
+               f"&start=0&max_results={limit}"
+               f"&sortBy=submittedDate&sortOrder=descending")
+
+        # arXiv 要求 User-Agent
+        headers = {"User-Agent": "LitCraft/1.0 (mailto:litcraft@example.com)"}
+        ns = {"atom": "http://www.w3.org/2005/Atom"}
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers,
+                                       timeout=aiohttp.ClientTimeout(total=60)) as response:
+                    xml_text = await response.text()
+
+            root = ET.fromstring(xml_text)
+            papers = []
+            for entry in root.findall("atom:entry", ns):
+                published_str = entry.findtext("atom:published", "", ns)
+                pub_year = int(published_str[:4]) if published_str and published_str[:4].isdigit() else 0
+                if year_from and pub_year < year_from:
+                    continue
+
+                entry_id = entry.findtext("atom:id", "", ns)
+                arxiv_id = entry_id.split("/abs/")[-1] if "/abs/" in entry_id else entry_id
+
+                authors = []
+                for author_el in entry.findall("atom:author", ns):
+                    name = author_el.findtext("atom:name", "", ns)
+                    if name:
+                        authors.append(name)
+
+                pdf_url = ""
+                for link in entry.findall("atom:link", ns):
+                    if link.get("title") == "pdf":
+                        pdf_url = link.get("href", "")
+                        break
+
+                title = entry.findtext("atom:title", "", ns)
+                summary = entry.findtext("atom:summary", "", ns)
+
+                paper_info = {
+                    "arxiv_id": arxiv_id,
+                    "title": title.replace("\n", " ").strip() if title else "",
+                    "authors": authors[:5],
+                    "published": published_str[:10] if published_str else "",
+                    "summary": summary.replace("\n", " ").strip()[:300] if summary else "",
+                    "pdf_url": pdf_url,
+                    "arxiv_url": entry_id,
+                }
+                papers.append(paper_info)
+
+            if not papers:
+                return json.dumps(
+                    {"message": f"No papers found for query: {query}", "papers": []},
+                    ensure_ascii=False
+                )
+
+            print(f"[OK] arXiv 异步搜索: 成功找到 {len(papers)} 篇论文")
+            return json.dumps(
+                {"query": query, "count": len(papers), "papers": papers},
+                ensure_ascii=False, indent=2
+            )
+
+        except asyncio.TimeoutError:
+            return json.dumps(
+                {"error": f"arXiv request timed out after 60 seconds"},
+                ensure_ascii=False
+            )
+        except aiohttp.ClientError as e:
+            return json.dumps(
+                {"error": f"arXiv HTTP error: {str(e)[:120]}"},
+                ensure_ascii=False
+            )
+        except ET.ParseError as e:
+            return json.dumps(
+                {"error": f"Failed to parse arXiv XML: {str(e)[:120]}"},
+                ensure_ascii=False
+            )
+        except Exception as e:
+            return json.dumps(
+                {"error": f"arXiv async search failed: {str(e)[:120]}"},
+                ensure_ascii=False
+            )

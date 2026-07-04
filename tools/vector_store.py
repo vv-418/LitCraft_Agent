@@ -54,9 +54,9 @@ class VectorStoreTool(Tool):
         # 设置环境变量，让 sentence-transformers 和 transformers 使用本地缓存
         os.environ['TRANSFORMERS_CACHE'] = str(model_cache_path.absolute())
         os.environ['SENTENCE_TRANSFORMERS_HOME'] = str(model_cache_path.absolute())
-        # 默认优先尝试离线模式（但允许首次下载时联网）
-        if 'HF_HUB_OFFLINE' not in os.environ:
-            os.environ['HF_HUB_OFFLINE'] = '0'  # 首次下载允许，之后会缓存
+        # 模型已缓存到本地，强制离线模式避免 huggingface_hub 更新检查阻塞
+        os.environ['HF_HUB_OFFLINE'] = '1'
+        os.environ['TRANSFORMERS_OFFLINE'] = '1'
         
         print(f"[CACHE] 模型缓存目录: {model_cache_path.absolute()}")
         

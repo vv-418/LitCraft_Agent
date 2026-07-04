@@ -1,6 +1,7 @@
 # 作用：实现从 arXiv 下载论文 PDF 的工具，带重试机制和错误处理。
 import os
 import json
+import re
 import time
 from typing import Any
 from pathlib import Path
@@ -101,11 +102,42 @@ class PaperDownloaderTool(Tool):
         
         return url
 
+    @staticmethod
+    def _extract_html_text(html_content: str) -> str:
+        """从 HTML 页面中提取正文文本（零依赖，纯正则）。
+        
+        处理中文期刊 HTML、学术论文 HTML 页面等，
+        去除 script/style 标签、HTML 标签、解码实体，
+        并规范化空白字符。
+        """
+        import html as html_mod
+        # 移除 script 和 style 块
+        cleaned = re.sub(
+            r'<(script|style|noscript|svg)[^>]*>.*?</\1>',
+            '',
+            html_content,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        # 移除 HTML 标签
+        cleaned = re.sub(r'<[^>]+>', ' ', cleaned)
+        # 移除多余空白行（保留段落分隔）
+        cleaned = re.sub(r'[ \t]+', ' ', cleaned)
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+        # 解码 HTML 实体（&nbsp; &amp; 等）
+        cleaned = html_mod.unescape(cleaned)
+        # 修复中文字符间多余空格
+        cleaned = re.sub(r'([\u4e00-\u9fff])\s+([\u4e00-\u9fff])', r'\1\2', cleaned)
+        cleaned = re.sub(r'([\u4e00-\u9fff])\s+([a-zA-Z])', r'\1\2', cleaned)
+        cleaned = re.sub(r'([a-zA-Z])\s+([\u4e00-\u9fff])', r'\1\2', cleaned)
+        return cleaned.strip()
+
     def run(self, tool_input: dict[str, Any]) -> str:
         """下载 PDF 文件。
         
         Args:
-            tool_input: 包含 'url' 和可选的 'filename' 字段
+            tool_input: 包含 'url' 和可选的 'filename' 字段。
+                        也兼容 LLM 生成的 'papers_to_download' 格式：
+                        [{"title": "...", "source_id": "...", ...}]
             
         Returns:
             JSON 字符串，包含下载结果
@@ -113,8 +145,50 @@ class PaperDownloaderTool(Tool):
         url = str(tool_input.get("url", "")).strip()
         custom_filename = str(tool_input.get("filename", "")).strip()
         
+        # ── 兼容 LLM 的 "papers_to_download" 格式 ──────────────
+        # LLM 经常传递 [{title, source_id}, ...] 而不是单条 url
+        if not url:
+            papers_list = tool_input.get("papers_to_download", [])
+            if isinstance(papers_list, list) and len(papers_list) > 0:
+                first = papers_list[0]
+                source_id = first.get("source_id", "") if isinstance(first, dict) else ""
+                title = first.get("title", "") if isinstance(first, dict) else str(first)
+                if source_id:
+                    # 用 Semantic Scholar source_id 构造 URL
+                    url = f"https://api.semanticscholar.org/{source_id}.pdf"
+                    print(f"  [PAPERS] 从 papers_to_download 提取 source_id: {source_id}", flush=True)
+                elif title:
+                    # 没有 source_id 时回退到 title 搜索（由 multi_source_search 的自动下载处理）
+                    return json.dumps({
+                        "status": "skipped",
+                        "message": f"无可用 URL，跳过: {title[:60]}"
+                    }, ensure_ascii=False)
+        
         if not url:
             return json.dumps({"error": "URL cannot be empty"}, ensure_ascii=False)
+
+        # ── 跳过已知非 PDF 的 URL ─────────────────────────────
+        # 搜索引擎返回的 URL 可能是登录页面、代理页面，而非真正的 PDF。
+        _SKIP_DOMAINS = [
+            "login.aspx", "search.ebscohost", "proxy", "login",
+            "signin", "sso", "auth", "authenticate",
+            "redirect", "redirector",
+        ]
+        _SKIP_EXTENSIONS = [".aspx", ".ashx", ".php", ".jsp", ".do", ".action"]
+        url_lower = url.lower()
+        for domain in _SKIP_DOMAINS:
+            if domain in url_lower:
+                return json.dumps({
+                    "status": "skipped",
+                    "message": f"跳过非 PDF URL（登录/代理页面）: {url[:120]}"
+                }, ensure_ascii=False)
+        for ext in _SKIP_EXTENSIONS:
+            # 只跳过无 .pdf 后缀的已知动态页面
+            if ext in url_lower and not url_lower.endswith(".pdf"):
+                return json.dumps({
+                    "status": "skipped",
+                    "message": f"跳过非 PDF URL（动态页面）: {url[:120]}"
+                }, ensure_ascii=False)
 
         # 规范化 URL
         pdf_url = self._normalize_url(url)
@@ -152,6 +226,33 @@ class PaperDownloaderTool(Tool):
             with session.get(pdf_url, timeout=self.timeout, stream=True) as response:
                 response.raise_for_status()
                 
+                # ── Content-Type 验证 ─────────────────────────────
+                # 某些 URL 返回 200 但内容不是 PDF（如登录页面返回 HTML），
+                # 尝试提取 HTML 正文文本，而非直接跳过。
+                content_type = response.headers.get("content-type", "").lower()
+                if "text/html" in content_type or "text/plain" in content_type:
+                    print(f"  [HTML] URL 返回 HTML，尝试提取正文文本...")
+                    html_content = response.text
+                    text = self._extract_html_text(html_content)
+                    # 改为 .txt 后缀保存
+                    txt_filename = filename.rsplit(".pdf", 1)[0] + ".txt"
+                    txt_path = self.storage_path / txt_filename
+                    with open(txt_path, "w", encoding="utf-8") as f:
+                        f.write(text)
+                    print(f"  [OK] HTML 正文已提取 -> {txt_filename} ({len(text)} 字符)")
+                    return json.dumps(
+                        {
+                            "status": "success",
+                            "filename": txt_filename,
+                            "path": str(txt_path),
+                            "size_bytes": len(text.encode("utf-8")),
+                            "url": pdf_url,
+                            "format": "html_extracted",
+                            "message": f"Extracted text from HTML: {txt_filename}"
+                        },
+                        ensure_ascii=False
+                    )
+
                 # 获取文件大小
                 total_size = int(response.headers.get("content-length", 0))
                 

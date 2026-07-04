@@ -1,10 +1,11 @@
 import os
+import time
 from openai import OpenAI
 from dotenv import load_dotenv
 from typing import List, Dict
 
-# 加载 .env 文件中的环境变量
-load_dotenv()
+# 加载 .env 文件中的环境变量（override=True 确保覆盖系统环境变量残留）
+load_dotenv(override=True)
 
 
 class LitCraftAgentsLLM:
@@ -40,31 +41,46 @@ class LitCraftAgentsLLM:
     def think(self, messages: List[Dict[str, str]], temperature: float = 0) -> str:
         """
         调用大语言模型进行思考，并返回其响应。
+        API 出错时自动重试最多 3 次，指数退避。
         """
-        print(f"[LLM] 正在调用 {self.model} 模型...")
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                stream=True,
-            )
+        max_retries = 3
+        last_error = None
 
-            # 处理流式响应
-            print("[OK] 大语言模型响应成功:")
-            collected_content = []
-            for chunk in response:
-                if not chunk.choices:
-                    continue
-                content = chunk.choices[0].delta.content or ""
-                print(content, end="", flush=True)
-                collected_content.append(content)
-            print()  # 在流式输出结束后换行
-            return "".join(collected_content)
+        for attempt in range(1, max_retries + 1):
+            try:
+                print(f"[LLM] 正在调用 {self.model} 模型 (第 {attempt}/{max_retries} 次)...", flush=True)
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    stream=True,
+                )
 
-        except Exception as e:
-            print(f"[ERROR] 调用LLM API时发生错误: {e}")
-            return None
+                print("[OK] 大语言模型响应成功:", flush=True)
+                collected_content = []
+                for chunk in response:
+                    if not chunk.choices:
+                        continue
+                    content = chunk.choices[0].delta.content or ""
+                    print(content, end="", flush=True)
+                    collected_content.append(content)
+                print()  # 在流式输出结束后换行
+                return "".join(collected_content)
+
+            except Exception as e:
+                last_error = e
+                err_msg = str(e)[:120]
+                if attempt < max_retries:
+                    wait = 2 ** attempt  # 2, 4, 8 秒
+                    print(f"\n[LLM] ⚠ API 调用失败 (尝试 {attempt}/{max_retries}): {err_msg}", flush=True)
+                    print(f"[LLM] 等待 {wait}s 后重试...", flush=True)
+                    time.sleep(wait)
+                else:
+                    print(f"\n[LLM] ❌ API 调用已全部失败 ({max_retries}/{max_retries}): {err_msg}", flush=True)
+
+        logger = __import__('logging').getLogger('llm')
+        logger.error("LLM API 调用失败 | model=%s | error=%s", self.model, str(last_error), exc_info=True)
+        raise last_error  # type: ignore
 
 
 # --- 客户端使用示例 ---

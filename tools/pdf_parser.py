@@ -235,6 +235,21 @@ class PDFParserTool(Tool):
             )
         
         try:
+            # ── 支持 .txt 文件（HTML 提取的论文正文） ──────────
+            if pdf_path.suffix.lower() in (".txt", ".html"):
+                print(f"[TXT] 读取文本文件: {pdf_path.name}...")
+                with open(pdf_path, "r", encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+                return json.dumps({
+                    "filename": pdf_path.name,
+                    "format": "text",
+                    "pages_count": 1,
+                    "total_chars": len(text),
+                    "metadata": {},
+                    "first_page_info": {"title": pdf_path.stem, "authors": [], "abstract": ""},
+                    "content": text,
+                }, ensure_ascii=False)
+
             print(f"[PDF] 开始解析 PDF: {pdf_path.name}...")
             
             with pdfplumber.open(str(pdf_path)) as pdf:

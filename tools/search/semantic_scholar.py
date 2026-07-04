@@ -1,4 +1,5 @@
 # 作用：实现 Semantic Scholar API 搜索工具，完全免费，无需密钥，每分钟 100 次请求。
+import asyncio
 import json
 import time
 import random
@@ -100,6 +101,9 @@ class SemanticScholarTool(Tool):
             JSON 字符串，包含论文列表
         """
         query = str(tool_input.get("query", "")).strip()
+        # 查询优化：剥离冗余前缀、归一化
+        from tools.search.query_optimizer import QueryOptimizer
+        query = QueryOptimizer.optimize_for_search_static(query)
         limit = int(tool_input.get("limit", self.max_results))
         limit = min(limit, self.max_results)
         year_from = tool_input.get("year_from")
@@ -188,3 +192,107 @@ class SemanticScholarTool(Tool):
                 {"error": f"Unexpected error: {str(e)}"},
                 ensure_ascii=False
             )
+
+    async def async_run(self, tool_input: dict[str, Any]) -> str:
+        """纯异步搜索 Semantic Scholar，使用 aiohttp 替代 requests。"""
+        import aiohttp
+
+        query = str(tool_input.get("query", "")).strip()
+        from tools.search.query_optimizer import QueryOptimizer
+        query = QueryOptimizer.optimize_for_search_static(query)
+        limit = int(tool_input.get("limit", self.max_results))
+        limit = min(limit, self.max_results)
+        year_from = tool_input.get("year_from")
+        year_to = tool_input.get("year_to")
+
+        if not query:
+            return json.dumps({"error": "Query cannot be empty"}, ensure_ascii=False)
+
+        params = {
+            "query": query,
+            "limit": limit,
+            "fields": "paperId,title,authors,year,abstract,venue,citationCount,openAccessPdf"
+        }
+        if year_from:
+            params["year"] = f"{year_from}:"
+        if year_to:
+            params["year"] = params.get("year", "") + f"{year_to}"
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        self.base_url,
+                        params=params,
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=self.timeout)
+                    ) as response:
+                        if response.status == 429:
+                            retry_after = int(response.headers.get("Retry-After", 5))
+                            wait = retry_after + random.uniform(0, 2)
+                            print(f"[WARN]  S2 429 速率限制（尝试 {attempt + 1}/{self.max_retries + 1}），等待 {wait:.0f} 秒...")
+                            await asyncio.sleep(wait)
+                            continue
+
+                        response.raise_for_status()
+                        data = await response.json()
+
+                if "data" not in data or not data["data"]:
+                    return json.dumps(
+                        {"message": f"No papers found for query: {query}", "papers": []},
+                        ensure_ascii=False
+                    )
+
+                papers = []
+                for item in data.get("data", []):
+                    authors = [author.get("name", "") for author in item.get("authors", [])[:5]]
+                    pdf_url = ""
+                    if item.get("openAccessPdf"):
+                        pdf_url = item["openAccessPdf"].get("url", "")
+                    paper_info = {
+                        "paper_id": item.get("paperId", ""),
+                        "title": item.get("title", ""),
+                        "authors": authors,
+                        "year": item.get("year", ""),
+                        "abstract": item.get("abstract", "")[:300] if item.get("abstract") else "",
+                        "venue": item.get("venue", ""),
+                        "citation_count": item.get("citationCount", 0),
+                        "pdf_url": pdf_url,
+                        "semantic_scholar_url": f"https://www.semanticscholar.org/paper/{item.get('paperId', '')}",
+                    }
+                    papers.append(paper_info)
+
+                print(f"[OK] S2 异步搜索: 成功找到 {len(papers)} 篇论文")
+                return json.dumps(
+                    {"query": query, "count": len(papers), "papers": papers, "source": "semantic_scholar"},
+                    ensure_ascii=False, indent=2
+                )
+
+            except (asyncio.TimeoutError, aiohttp.ServerTimeoutError):
+                if attempt == self.max_retries:
+                    return json.dumps(
+                        {"error": f"Semantic Scholar request timed out after {self.timeout} seconds"},
+                        ensure_ascii=False
+                    )
+                wait = (2 ** (attempt + 1)) + random.uniform(0, 2)
+                await asyncio.sleep(wait)
+                continue
+
+            except aiohttp.ClientError as e:
+                if attempt == self.max_retries:
+                    return json.dumps(
+                        {"error": f"Failed to search Semantic Scholar: {str(e)[:120]}"},
+                        ensure_ascii=False
+                    )
+                wait = (2 ** (attempt + 1)) + random.uniform(0, 2)
+                await asyncio.sleep(wait)
+                continue
+
+        return json.dumps(
+            {"error": "Semantic Scholar: max retries exhausted"},
+            ensure_ascii=False
+        )
