@@ -93,7 +93,7 @@ class GoogleScholarTool(Tool):
         from tools.search.query_optimizer import QueryOptimizer
         query = QueryOptimizer.optimize_for_search_static(query)
         limit = int(tool_input.get("limit", self.max_results))
-        limit = min(limit, self.max_results)
+        limit = max(1, min(limit, max(self.max_results, 50)))
         year_from = tool_input.get("year_from")
 
         if not query:

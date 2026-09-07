@@ -11,6 +11,10 @@ from urllib3.util.retry import Retry
 
 from tools.base import Tool
 
+# HTML 抽正文过短视为无效（登录页/空壳页常只有导航文案）
+_MIN_EXTRACTED_CHARS = int(os.getenv("MIN_HTML_EXTRACT_CHARS", "200") or 200)
+_MIN_FILE_BYTES = 100
+
 
 class PaperDownloaderTool(Tool):
     """从 arXiv 下载论文 PDF 的工具。"""
@@ -26,20 +30,20 @@ class PaperDownloaderTool(Tool):
         "required": ["url"],
     }
 
-    def __init__(self, storage_path: str = "./storage/papers", max_retries: int = 3, timeout: int = 30):
+    def __init__(self, storage_path: str = "", max_retries: int = 3, timeout: int = 30):
         """初始化 PaperDownloaderTool。
         
         Args:
-            storage_path: 论文存储目录
+            storage_path: 论文保存目录（综述任务传入 output/日期/主题/lit_source）
             max_retries: 最大重试次数
             timeout: 下载超时时间（秒）
         """
-        self.storage_path = Path(storage_path)
+        raw = (storage_path or "").strip()
+        self.storage_path = Path(raw) if raw else None
         self.max_retries = max_retries
         self.timeout = timeout
-        
-        # 创建存储目录（如果不存在）
-        self.storage_path.mkdir(parents=True, exist_ok=True)
+        if self.storage_path is not None:
+            self.storage_path.mkdir(parents=True, exist_ok=True)
 
     def _create_session(self) -> requests.Session:
         """创建带有重试策略的 requests 会话。"""
@@ -142,8 +146,14 @@ class PaperDownloaderTool(Tool):
         Returns:
             JSON 字符串，包含下载结果
         """
+        if self.storage_path is None:
+            return json.dumps({
+                "error": "未指定保存目录：综述任务应下载到 output/日期/主题/lit_source",
+            }, ensure_ascii=False)
+
         url = str(tool_input.get("url", "")).strip()
-        custom_filename = str(tool_input.get("filename", "")).strip()
+        custom_filename = os.path.basename(str(tool_input.get("filename", "")).strip())
+        paper_title = str(tool_input.get("title", "")).strip()
         
         # ── 兼容 LLM 的 "papers_to_download" 格式 ──────────────
         # LLM 经常传递 [{title, source_id}, ...] 而不是单条 url
@@ -153,15 +163,17 @@ class PaperDownloaderTool(Tool):
                 first = papers_list[0]
                 source_id = first.get("source_id", "") if isinstance(first, dict) else ""
                 title = first.get("title", "") if isinstance(first, dict) else str(first)
+                if isinstance(first, dict):
+                    paper_title = paper_title or str(first.get("title") or "").strip()
+                    url = url or str(first.get("pdf_url") or first.get("url") or "").strip()
                 if source_id:
                     # 用 Semantic Scholar source_id 构造 URL
                     url = f"https://api.semanticscholar.org/{source_id}.pdf"
                     print(f"  [PAPERS] 从 papers_to_download 提取 source_id: {source_id}", flush=True)
-                elif title:
-                    # 没有 source_id 时回退到 title 搜索（由 multi_source_search 的自动下载处理）
+                elif not url:
                     return json.dumps({
                         "status": "skipped",
-                        "message": f"无可用 URL，跳过: {title[:60]}"
+                        "message": f"无可用 URL，跳过: {(title or '')[:60]}"
                     }, ensure_ascii=False)
         
         if not url:
@@ -173,6 +185,8 @@ class PaperDownloaderTool(Tool):
             "login.aspx", "search.ebscohost", "proxy", "login",
             "signin", "sso", "auth", "authenticate",
             "redirect", "redirector",
+            "semanticscholar.org/paper/",  # 落地页 HTML，不是 PDF
+            "scholar.google.",
         ]
         _SKIP_EXTENSIONS = [".aspx", ".ashx", ".php", ".jsp", ".do", ".action"]
         url_lower = url.lower()
@@ -193,28 +207,55 @@ class PaperDownloaderTool(Tool):
         # 规范化 URL
         pdf_url = self._normalize_url(url)
         
-        # 确定文件名
+        # 确定文件名：优先自定义，其次标题+网址，最后从 URL 推断
         if custom_filename:
-            filename = custom_filename if custom_filename.endswith(".pdf") else custom_filename + ".pdf"
+            filename = custom_filename if custom_filename.lower().endswith((".pdf", ".txt")) else custom_filename + ".pdf"
+        elif paper_title:
+            from utils.review_output import paper_export_filename
+            filename = paper_export_filename(paper_title, pdf_url)
         else:
             filename = self._get_filename_from_url(pdf_url)
         
-        # 构建完整文件路径
+        # 构建完整文件路径（PDF 或此前 HTML 抽成的 .txt）
         file_path = self.storage_path / filename
-        
-        # 检查文件是否已存在
-        if file_path.exists():
-            file_size = file_path.stat().st_size
-            return json.dumps(
-                {
-                    "status": "already_exists",
-                    "filename": filename,
-                    "path": str(file_path),
-                    "size_bytes": file_size,
-                    "message": f"File already exists: {filename} ({file_size} bytes)"
-                },
-                ensure_ascii=False
-            )
+        txt_sibling = self.storage_path / (filename.rsplit(".pdf", 1)[0] + ".txt")
+
+        def _usable_existing(path: Path) -> dict | None:
+            if not path.exists():
+                return None
+            size = path.stat().st_size
+            if size < _MIN_FILE_BYTES:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                print(f"  [SKIP] 已存在文件过小已删除，将重试: {path.name} ({size} bytes)")
+                return None
+            if path.suffix.lower() == ".txt":
+                try:
+                    raw = path.read_text(encoding="utf-8", errors="replace").strip()
+                except OSError:
+                    return None
+                if len(raw) < _MIN_EXTRACTED_CHARS:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    print(f"  [SKIP] 已存在 TXT 正文过短已删除: {path.name} ({len(raw)} 字符)")
+                    return None
+            return {
+                "status": "already_exists",
+                "filename": path.name,
+                "path": str(path),
+                "size_bytes": size,
+                "has_content": True,
+                "message": f"File already exists: {path.name} ({size} bytes)",
+            }
+
+        for candidate in (file_path, txt_sibling):
+            existing = _usable_existing(candidate)
+            if existing:
+                return json.dumps(existing, ensure_ascii=False)
 
         # 下载 PDF
         try:
@@ -228,15 +269,35 @@ class PaperDownloaderTool(Tool):
                 
                 # ── Content-Type 验证 ─────────────────────────────
                 # 某些 URL 返回 200 但内容不是 PDF（如登录页面返回 HTML），
-                # 尝试提取 HTML 正文文本，而非直接跳过。
+                # 尝试提取 HTML 正文；过短则视为失败，不返回空壳。
                 content_type = response.headers.get("content-type", "").lower()
                 if "text/html" in content_type or "text/plain" in content_type:
                     print(f"  [HTML] URL 返回 HTML，尝试提取正文文本...")
                     html_content = response.text
                     text = self._extract_html_text(html_content)
-                    # 改为 .txt 后缀保存
                     txt_filename = filename.rsplit(".pdf", 1)[0] + ".txt"
                     txt_path = self.storage_path / txt_filename
+                    if len(text.strip()) < _MIN_EXTRACTED_CHARS:
+                        if txt_path.exists():
+                            try:
+                                txt_path.unlink(missing_ok=True)
+                            except OSError:
+                                pass
+                        print(
+                            f"  [SKIP] HTML 无有效正文（{len(text.strip())} 字符 "
+                            f"< {_MIN_EXTRACTED_CHARS}），不记为成功下载"
+                        )
+                        return json.dumps(
+                            {
+                                "status": "error",
+                                "error": "html_empty_or_too_short",
+                                "chars": len(text.strip()),
+                                "url": pdf_url,
+                                "filename": txt_filename,
+                                "message": "HTML extracted text empty or too short",
+                            },
+                            ensure_ascii=False,
+                        )
                     with open(txt_path, "w", encoding="utf-8") as f:
                         f.write(text)
                     print(f"  [OK] HTML 正文已提取 -> {txt_filename} ({len(text)} 字符)")
@@ -248,6 +309,7 @@ class PaperDownloaderTool(Tool):
                             "size_bytes": len(text.encode("utf-8")),
                             "url": pdf_url,
                             "format": "html_extracted",
+                            "has_content": True,
                             "message": f"Extracted text from HTML: {txt_filename}"
                         },
                         ensure_ascii=False
@@ -270,6 +332,23 @@ class PaperDownloaderTool(Tool):
                                 print(f"   进度: {progress:.1f}% ({downloaded_size}/{total_size} bytes)", end="\r")
                 
                 print(f"\n[OK] 下载成功: {filename} ({downloaded_size} bytes)")
+
+                if downloaded_size < _MIN_FILE_BYTES:
+                    try:
+                        file_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    return json.dumps(
+                        {
+                            "status": "error",
+                            "error": "pdf_too_small",
+                            "size_bytes": downloaded_size,
+                            "url": pdf_url,
+                            "filename": filename,
+                            "message": "Downloaded file too small to be valid content",
+                        },
+                        ensure_ascii=False,
+                    )
                 
                 return json.dumps(
                     {
@@ -278,6 +357,7 @@ class PaperDownloaderTool(Tool):
                         "path": str(file_path),
                         "size_bytes": downloaded_size,
                         "url": pdf_url,
+                        "has_content": True,
                         "message": f"Successfully downloaded: {filename}"
                     },
                     ensure_ascii=False

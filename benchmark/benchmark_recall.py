@@ -1,158 +1,275 @@
 """
-大规模召回率评测：对比 HyDE / MQE / Hybrid / 传统向量检索。
-自动使用 Chroma 中所有可用集合，动态构建跨集合检索场景。
+SciFact 向量检索召回率评测。
+
+对比：
+  - traditional：纯 Dense（Chroma + MiniLM）
+  - advanced：当前项目默认策略（多查询 Dense+BM25+RRF+主题门槛+MMR）
+
+数据目录：datasets/scifact/
+结果输出：benchmark/benchmark_result/benchmark_recall.json
+
+用法：
+  python benchmark/benchmark_recall.py
+  python benchmark/benchmark_recall.py --max-queries 50
+  python benchmark/benchmark_recall.py --rebuild-index
 """
-import json, sys, time
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from collections import defaultdict
 from pathlib import Path
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from tools.vector_store import VectorStoreTool
+
+from benchmark.paths import RESULT_DIR, result_path
 from tools.advanced_retrieval import AdvancedRetrieval
-from llm_client import LitCraftAgentsLLM
+from tools.vector_store import VectorStoreTool
 
-MERGED = "benchmark_merged"
-
-
-def get_collections(vs):
-    return sorted([c.name for c in vs.client.list_collections()
-                   if not c.name.startswith("benchmark_")])
+SCIFACT_DIR = ROOT / "datasets" / "scifact"
+COLLECTION = "scifact_beir"
 
 
-def recall(retrieved, gt, k):
-    if not gt:
+def load_jsonl(path: Path) -> list[dict]:
+    rows = []
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+def load_qrels(path: Path) -> dict[str, set[str]]:
+    """query_id -> set(corpus_id)，仅保留 score>0。"""
+    qrels: dict[str, set[str]] = defaultdict(set)
+    with path.open(encoding="utf-8") as f:
+        header = f.readline()
+        for line in f:
+            parts = line.strip().split("\t")
+            if len(parts) < 3:
+                continue
+            qid, did, score = parts[0], parts[1], parts[2]
+            try:
+                if float(score) > 0:
+                    qrels[qid].add(did)
+            except ValueError:
+                continue
+    return dict(qrels)
+
+
+def recall_at_k(retrieved: list[str], gold: set[str], k: int) -> float:
+    if not gold:
         return 0.0
-    hits = len(set(list(retrieved)[:k]) & gt)
-    norm = min(len(gt), k)
-    return hits / norm if norm > 0 else 0.0
+    hits = len(set(retrieved[:k]) & gold)
+    return hits / min(len(gold), k)
 
 
-def run_one(vs, ar, col_name, query, gt, top_k=10):
+def ensure_scifact_index(vs: VectorStoreTool, rebuild: bool = False) -> int:
+    """把 SciFact corpus 写入 Chroma；chunk_id = 论文 _id，便于按 qrels 算召回。"""
+    corpus_path = SCIFACT_DIR / "corpus.jsonl"
+    if not corpus_path.exists():
+        raise FileNotFoundError(f"找不到 SciFact corpus: {corpus_path}")
+
+    corpus = load_jsonl(corpus_path)
+    existing = {c.name for c in vs.client.list_collections()}
+
+    if COLLECTION in existing and not rebuild:
+        count = vs.client.get_collection(COLLECTION).count()
+        if count >= len(corpus) * 0.95:
+            print(f"[INDEX] 复用已有集合 {COLLECTION}（{count} docs）")
+            return count
+        print(f"[INDEX] 集合文档数不足（{count}/{len(corpus)}），重建")
+        rebuild = True
+
+    if rebuild and COLLECTION in existing:
+        vs.client.delete_collection(COLLECTION)
+        print(f"[INDEX] 已删除旧集合 {COLLECTION}")
+
+    print(f"[INDEX] 写入 SciFact corpus → {COLLECTION}（{len(corpus)} 篇）...")
+    batch_size = 64
+    for start in range(0, len(corpus), batch_size):
+        batch = corpus[start : start + batch_size]
+        chunks = []
+        for doc in batch:
+            doc_id = str(doc["_id"])
+            title = doc.get("title") or ""
+            text = doc.get("text") or ""
+            content = f"{title}\n\n{text}".strip()
+            chunks.append({
+                "chunk_id": doc_id,
+                "content": content,
+                "source": "scifact",
+                "metadata": {
+                    "chunk_id": doc_id,
+                    "doc_id": doc_id,
+                    "title": title[:200],
+                },
+            })
+        result = json.loads(vs._add_chunks(COLLECTION, chunks))
+        if result.get("status") != "success":
+            raise RuntimeError(f"写入失败: {result}")
+        done = min(start + batch_size, len(corpus))
+        if done % 512 == 0 or done == len(corpus):
+            print(f"  ... {done}/{len(corpus)}")
+
+    count = vs.client.get_collection(COLLECTION).count()
+    print(f"[INDEX] 完成，共 {count} docs")
+    return count
+
+
+def extract_doc_ids(raw: dict) -> list[str]:
+    """从检索结果抽出文档 id（保序去重）。"""
+    ids: list[str] = []
+    seen = set()
+    for c in raw.get("chunks", []):
+        meta = c.get("metadata") or {}
+        cid = str(meta.get("chunk_id") or meta.get("doc_id") or c.get("chunk_id") or "")
+        if cid and cid not in seen:
+            seen.add(cid)
+            ids.append(cid)
+    return ids
+
+
+def run_strategies(vs: VectorStoreTool, ar: AdvancedRetrieval, query: str, top_k: int) -> dict:
     out = {}
-    for sname, sfn in [
-        ("traditional", lambda q: json.loads(vs._search(col_name, q, top_k=top_k, threshold=0.0))),
-        ("hyde", lambda q: json.loads(ar.run({"collection_name": col_name, "query": q, "top_k": top_k, "strategy": "hyde", "threshold": 0.0}))),
-        ("mqe", lambda q: json.loads(ar.run({"collection_name": col_name, "query": q, "top_k": top_k, "strategy": "mque", "threshold": 0.0}))),
-        ("hybrid", lambda q: json.loads(ar.run({"collection_name": col_name, "query": q, "top_k": top_k, "strategy": "hybrid", "threshold": 0.0}))),
-    ]:
-        t0 = time.perf_counter()
-        try:
-            raw = sfn(query)
-            ids = set()
-            for c in raw.get("chunks", []):
-                meta = c.get("metadata") or {}
-                cid = meta.get("chunk_id", "")
-                if cid:
-                    ids.add(str(cid))
-        except Exception:
-            ids = set()
-        t = time.perf_counter() - t0
-        out[f"{sname}_retrieved"] = len(ids)
-        out[f"{sname}_recall@5"] = round(recall(ids, gt, 5), 4)
-        out[f"{sname}_recall@10"] = round(recall(ids, gt, 10), 4)
-        out[f"{sname}_time"] = round(t, 2)
+
+    # 1) 传统 Dense
+    t0 = time.perf_counter()
+    try:
+        raw = json.loads(vs._search(COLLECTION, query, top_k=top_k, threshold=0.0))
+        ids = extract_doc_ids(raw)
+    except Exception as e:
+        print(f"  [WARN] traditional 失败: {e}")
+        ids = []
+    out["traditional"] = {
+        "ids": ids,
+        "time": round(time.perf_counter() - t0, 3),
+    }
+
+    # 2) 当前 advanced_search
+    t0 = time.perf_counter()
+    try:
+        raw = json.loads(
+            ar.run({
+                "collection_name": COLLECTION,
+                "query": query,
+                "top_k": top_k,
+                "threshold": 0.0,  # 评测时放宽主题门槛，避免把 gold 误杀
+            })
+        )
+        ids = extract_doc_ids(raw)
+    except Exception as e:
+        print(f"  [WARN] advanced 失败: {e}")
+        ids = []
+    out["advanced"] = {
+        "ids": ids,
+        "time": round(time.perf_counter() - t0, 3),
+    }
     return out
 
 
-def build_merged(vs, cols):
-    # 先删除旧的（可能有错误的 chunk_id）
-    if MERGED in {c.name for c in vs.client.list_collections()}:
-        try:
-            vs.client.delete_collection(MERGED)
-            print(f"[SETUP] 删除旧合并集，准备重建")
-        except:
-            pass
-    print(f"[SETUP] 构建合并集合 '{MERGED}'...")
-    all_chunks = []
-    for cn in cols:
-        try:
-            col = vs.client.get_collection(name=cn)
-            data = col.get(include=["documents", "metadatas"])
-            for i, (doc, meta) in enumerate(zip(data.get("documents",[]), data.get("metadatas",[]))):
-                # metadata.chunk_id 使用带前缀的 ID，便于 recall 计算
-                cid = f"{cn}_{i}"
-                all_chunks.append({"chunk_id": cid, "content": doc, "source": cn,
-                                   "metadata": {"source_collection": cn, "chunk_id": cid}})
-        except Exception as e:
-            print(f"  ⚠️ {cn}: {e}")
-    json.loads(vs._add_chunks(MERGED, all_chunks))
-    print(f"  ✅ 合并: {len(all_chunks)} chunks")
-
-
-def print_result(label, rows):
-    print(f"\n  ── {label} ──")
-    base = [r.get("traditional_recall@5", 0) for r in rows]
-    for sname, slabel in [("traditional","传统向量"),("hyde","HyDE"),("mqe","MQE"),("hybrid","Hybrid")]:
-        vals = [r.get(f"{sname}_recall@5", 0) for r in rows]
-        avg = sum(vals)/len(vals)
-        t = sum(r.get(f"{sname}_time",0) for r in rows)/len(rows)
-        rel = ""
-        if sname != "traditional" and base:
-            d = sum((v-b)/b*100 for v,b in zip(vals,base) if b>0)
-            cnt = sum(1 for v,b in zip(vals,base) if b>0)
-            if cnt: rel = f" (Δ={d/cnt:+.1f}%)"
-        print(f"    {slabel:<10} recall@5={avg:.3f}  time={t:.1f}s{rel}")
-
-
 def main():
-    print("=" * 75)
-    print("  🔬 大规模检索策略召回率评测 (双语 HyDE/MQE)")
-    print("=" * 75)
+    parser = argparse.ArgumentParser(description="SciFact 召回率评测")
+    parser.add_argument("--split", default="test", choices=["test", "train"], help="qrels 划分")
+    parser.add_argument("--max-queries", type=int, default=0, help="最多评测多少条 query（0=全部）")
+    parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--rebuild-index", action="store_true", help="强制重建 Chroma 索引")
+    args = parser.parse_args()
+
+    qrels_path = SCIFACT_DIR / "qrels" / f"{args.split}.tsv"
+    queries_path = SCIFACT_DIR / "queries.jsonl"
+    if not qrels_path.exists() or not queries_path.exists():
+        raise FileNotFoundError(
+            f"SciFact 数据不完整，请确认存在:\n  {queries_path}\n  {qrels_path}\n  {SCIFACT_DIR / 'corpus.jsonl'}"
+        )
+
+    print("=" * 72)
+    print("  SciFact 向量检索召回率评测")
+    print("  traditional (Dense)  vs  advanced (Dense+BM25+RRF+MMR)")
+    print("=" * 72)
+
+    qrels = load_qrels(qrels_path)
+    queries = {str(q["_id"]): q.get("text", "") for q in load_jsonl(queries_path)}
+    eval_qids = [qid for qid in qrels.keys() if qid in queries and queries[qid].strip()]
+    if args.max_queries > 0:
+        eval_qids = eval_qids[: args.max_queries]
+
+    print(f"  split={args.split}  queries={len(eval_qids)}  top_k={args.top_k}")
+    print(f"  结果目录: {RESULT_DIR}")
+
     vs = VectorStoreTool(db_path="./storage/chroma", local_model_cache="./models")
-    cols = get_collections(vs)
-    total = sum(c.count() for c in vs.client.list_collections() if not c.name.startswith("benchmark_"))
-    print(f"  {len(cols)} collections, {total} chunks")
-    llm = LitCraftAgentsLLM()
-    ar = AdvancedRetrieval(vector_store=vs, llm=llm, num_hypotheses=2, num_query_variants=2)
-    build_merged(vs, cols)
+    ensure_scifact_index(vs, rebuild=args.rebuild_index)
+    ar = AdvancedRetrieval(vector_store=vs, topic_threshold=0.0)
 
-    # 生成 6 篇代表性论文 × 2 语言 = 12 个查询（控制评测时长）
-    targets = cols[:6]
-    queries = []
-    for cn in targets:
-        n = vs.client.get_collection(name=cn).count()
-        label = cn.replace("_", " ").title()
-        for q, lang in [(f"{label} research", "EN"), (f"{label} 研究", "CN")]:
-            queries.append({"query": q, "target": cn, "label": f"{label[:25]}({lang})",
-                            "n_chunks": n})
+    rows = []
+    for i, qid in enumerate(eval_qids, 1):
+        query = queries[qid]
+        gold = qrels[qid]
+        print(f"\n[{i}/{len(eval_qids)}] qid={qid} | gold={len(gold)} | {query[:70]}")
+        strat = run_strategies(vs, ar, query, args.top_k)
 
-    # 场景 A: 同集合
-    print(f"\n{'='*75}\n  场景 A: 同集合检索（基线）")
-    rows_a = []
-    for q in queries:
-        col = vs.client.get_collection(name=q["target"])
-        data = col.get(include=["metadatas"])
-        gt = set()
-        for m in (data.get("metadatas") or []):
-            if m and "chunk_id" in m: gt.add(str(m["chunk_id"]))
-        res = run_one(vs, ar, q["target"], q["query"], gt)
-        print(f"  [{q['label'][:30]}] 传统={res['traditional_recall@5']:.3f} HyDE={res['hyde_recall@5']:.3f} MQE={res['mqe_recall@5']:.3f} Hybrid={res['hybrid_recall@5']:.3f}")
-        rows_a.append({**q, **res})
+        row = {
+            "query_id": qid,
+            "query": query,
+            "gold_count": len(gold),
+            "gold_ids": sorted(gold),
+        }
+        for name, payload in strat.items():
+            ids = payload["ids"]
+            row[f"{name}_retrieved"] = len(ids)
+            row[f"{name}_ids"] = ids
+            row[f"{name}_recall@5"] = round(recall_at_k(ids, gold, 5), 4)
+            row[f"{name}_recall@10"] = round(recall_at_k(ids, gold, 10), 4)
+            row[f"{name}_time"] = payload["time"]
+            print(
+                f"    {name:<12} R@5={row[f'{name}_recall@5']:.3f}  "
+                f"R@10={row[f'{name}_recall@10']:.3f}  t={payload['time']:.2f}s"
+            )
+        rows.append(row)
 
-    # 场景 B: 跨集合
-    print(f"\n{'='*75}\n  场景 B: 跨集合检索")
-    rows_b = []
-    for q in queries:
-        cn, label = q["target"], q["label"]
-        n = q["n_chunks"]
-        gt = {f"{cn}_{i}" for i in range(n)}
-        res = run_one(vs, ar, MERGED, q["query"], gt)
-        print(f"  [{label[:30]}] 传统={res['traditional_recall@5']:.3f} HyDE={res['hyde_recall@5']:.3f} MQE={res['mqe_recall@5']:.3f} Hybrid={res['hybrid_recall@5']:.3f}")
-        rows_b.append({**q, **res})
+    def avg(key: str) -> float:
+        if not rows:
+            return 0.0
+        return round(sum(r[key] for r in rows) / len(rows), 4)
 
-    print(f"\n{'='*75}")
-    print_result("场景 A: 同集合", rows_a)
-    print_result("场景 B: 跨集合", rows_b)
+    summary = {
+        "dataset": "scifact",
+        "split": args.split,
+        "num_queries": len(rows),
+        "collection": COLLECTION,
+        "traditional_recall@5": avg("traditional_recall@5"),
+        "traditional_recall@10": avg("traditional_recall@10"),
+        "traditional_time_avg": avg("traditional_time"),
+        "advanced_recall@5": avg("advanced_recall@5"),
+        "advanced_recall@10": avg("advanced_recall@10"),
+        "advanced_time_avg": avg("advanced_time"),
+    }
 
-    # NLP 类 vs CV 类细分
-    nlp = [r for r in rows_b if any(k in r["target"] for k in ("attention","bert","gpt","roberta","distilbert","tensor"))]
-    cv = [r for r in rows_b if any(k in r["target"] for k in ("residual","detection","deep_residual","2606"))]
-    if nlp: print_result("场景 B/NLP类", nlp)
-    if cv: print_result("场景 B/CV类", cv)
+    print("\n" + "=" * 72)
+    print("  汇总")
+    print(
+        f"  traditional  R@5={summary['traditional_recall@5']:.4f}  "
+        f"R@10={summary['traditional_recall@10']:.4f}  "
+        f"t={summary['traditional_time_avg']:.2f}s"
+    )
+    print(
+        f"  advanced     R@5={summary['advanced_recall@5']:.4f}  "
+        f"R@10={summary['advanced_recall@10']:.4f}  "
+        f"t={summary['advanced_time_avg']:.2f}s"
+    )
 
-    out = ROOT / "output" / "benchmark_recall.json"
-    json.dump({"scenario_a": rows_a, "scenario_b": rows_b},
-              open(str(out),"w",encoding="utf-8"), ensure_ascii=False, indent=2)
-    print(f"\n[SAVE] {out}")
+    out_path = result_path("benchmark_recall.json")
+    payload = {
+        "summary": summary,
+        "rows": rows,
+    }
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\n[SAVE] {out_path}")
 
 
 if __name__ == "__main__":

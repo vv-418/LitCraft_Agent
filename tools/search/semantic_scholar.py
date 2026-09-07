@@ -1,6 +1,8 @@
-# 作用：实现 Semantic Scholar API 搜索工具，完全免费，无需密钥，每分钟 100 次请求。
+# 作用：实现 Semantic Scholar API 搜索工具。
+# 有 SEMANTIC_SCHOLAR_API_KEY 时带 x-api-key（官方约 1 req/s）；无密钥仍可匿名调用但更易限流。
 import asyncio
 import json
+import os
 import time
 import random
 from typing import Any
@@ -25,25 +27,54 @@ class SemanticScholarTool(Tool):
         "required": ["query"],
     }
 
-    def __init__(self, max_results: int = 5, timeout: int = 30):
+    def __init__(self, max_results: int = 5, timeout: int = 30, api_key: str | None = None):
         """初始化 Semantic Scholar Tool。
         
         Args:
             max_results: 最多返回的论文数量
             timeout: 请求超时时间（秒）
+            api_key: S2 API Key；默认读环境变量 SEMANTIC_SCHOLAR_API_KEY / S2_API_KEY
         """
         self.max_results = max_results
         self.timeout = timeout
         self.base_url = "https://api.semanticscholar.org/graph/v1/paper/search"
+        self.api_key = (
+            (api_key or "").strip()
+            or (os.getenv("SEMANTIC_SCHOLAR_API_KEY") or "").strip()
+            or (os.getenv("S2_API_KEY") or "").strip()
+        )
         self.last_request_time = 0
-        self.min_delay = 3.5  # 最小请求延迟（秒），官方限制 100 req/min ≈ 0.6s，设 3.5s 更安全
-        self.max_retries = 3  # 429 重试次数
+        # 有 key：官方 1 req/s，略留余量；无 key：更保守
+        self.min_delay = 1.1 if self.api_key else 3.5
+        self.max_retries = 3
+
+    def _headers(self) -> dict[str, str]:
+        headers = {
+            "User-Agent": "LitCraft-Agent/1.0 (academic literature review)",
+        }
+        if self.api_key:
+            headers["x-api-key"] = self.api_key
+        return headers
+
+    @staticmethod
+    def _resolve_pdf_url(item: dict) -> str:
+        """优先 openAccessPdf；其次 ArXiv externalId；不用 S2 网页 HTML。"""
+        oa = item.get("openAccessPdf") or {}
+        pdf_url = (oa.get("url") or "").strip() if isinstance(oa, dict) else ""
+        if pdf_url and "semanticscholar.org/paper/" not in pdf_url.lower():
+            return pdf_url
+        ext = item.get("externalIds") or {}
+        if isinstance(ext, dict):
+            arxiv_id = (ext.get("ArXiv") or ext.get("arXiv") or "").strip()
+            if arxiv_id:
+                return f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+        return ""
 
     def _rate_limit(self):
         """实现速率限制：保持请求间隔至少 min_delay 秒。"""
         elapsed = time.time() - self.last_request_time
         if elapsed < self.min_delay:
-            sleep_time = self.min_delay - elapsed + random.uniform(0, 0.5)
+            sleep_time = self.min_delay - elapsed + random.uniform(0, 0.15)
             time.sleep(sleep_time)
         self.last_request_time = time.time()
 
@@ -58,14 +89,10 @@ class SemanticScholarTool(Tool):
             try:
                 self._rate_limit()
                 
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                }
-                
                 response = requests.get(
                     self.base_url,
                     params=params,
-                    headers=headers,
+                    headers=self._headers(),
                     timeout=self.timeout
                 )
                 
@@ -105,7 +132,7 @@ class SemanticScholarTool(Tool):
         from tools.search.query_optimizer import QueryOptimizer
         query = QueryOptimizer.optimize_for_search_static(query)
         limit = int(tool_input.get("limit", self.max_results))
-        limit = min(limit, self.max_results)
+        limit = max(1, min(limit, max(self.max_results, 50)))
         year_from = tool_input.get("year_from")
         year_to = tool_input.get("year_to")
 
@@ -113,13 +140,14 @@ class SemanticScholarTool(Tool):
             return json.dumps({"error": "Query cannot be empty"}, ensure_ascii=False)
 
         try:
-            print(f"[SEARCH] 搜索 Semantic Scholar...")
+            auth = "API key" if self.api_key else "anonymous"
+            print(f"[SEARCH] 搜索 Semantic Scholar（{auth}）...")
             
             # 构建查询参数
             params = {
                 "query": query,
                 "limit": limit,
-                "fields": "paperId,title,authors,year,abstract,venue,citationCount,openAccessPdf"
+                "fields": "paperId,title,authors,year,abstract,venue,citationCount,openAccessPdf,externalIds",
             }
             
             # 如果指定了年份范围，添加到查询
@@ -147,11 +175,6 @@ class SemanticScholarTool(Tool):
                 # 提取作者名称
                 authors = [author.get("name", "") for author in item.get("authors", [])[:5]]
                 
-                # 获取 PDF URL（如果可用）
-                pdf_url = ""
-                if item.get("openAccessPdf"):
-                    pdf_url = item["openAccessPdf"].get("url", "")
-                
                 paper_info = {
                     "paper_id": item.get("paperId", ""),
                     "title": item.get("title", ""),
@@ -160,7 +183,7 @@ class SemanticScholarTool(Tool):
                     "abstract": item.get("abstract", "")[:300] if item.get("abstract") else "",
                     "venue": item.get("venue", ""),
                     "citation_count": item.get("citationCount", 0),
-                    "pdf_url": pdf_url,
+                    "pdf_url": self._resolve_pdf_url(item),
                     "semantic_scholar_url": f"https://www.semanticscholar.org/paper/{item.get('paperId', '')}",
                 }
                 papers.append(paper_info)
@@ -201,7 +224,7 @@ class SemanticScholarTool(Tool):
         from tools.search.query_optimizer import QueryOptimizer
         query = QueryOptimizer.optimize_for_search_static(query)
         limit = int(tool_input.get("limit", self.max_results))
-        limit = min(limit, self.max_results)
+        limit = max(1, min(limit, max(self.max_results, 50)))
         year_from = tool_input.get("year_from")
         year_to = tool_input.get("year_to")
 
@@ -211,19 +234,23 @@ class SemanticScholarTool(Tool):
         params = {
             "query": query,
             "limit": limit,
-            "fields": "paperId,title,authors,year,abstract,venue,citationCount,openAccessPdf"
+            "fields": "paperId,title,authors,year,abstract,venue,citationCount,openAccessPdf,externalIds",
         }
         if year_from:
             params["year"] = f"{year_from}:"
         if year_to:
             params["year"] = params.get("year", "") + f"{year_to}"
 
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
+        headers = self._headers()
 
         for attempt in range(self.max_retries + 1):
             try:
+                # 与同步路径共用客户端侧限速
+                elapsed = time.time() - self.last_request_time
+                if elapsed < self.min_delay:
+                    await asyncio.sleep(self.min_delay - elapsed + random.uniform(0, 0.15))
+                self.last_request_time = time.time()
+
                 async with aiohttp.ClientSession() as session:
                     async with session.get(
                         self.base_url,
@@ -250,9 +277,6 @@ class SemanticScholarTool(Tool):
                 papers = []
                 for item in data.get("data", []):
                     authors = [author.get("name", "") for author in item.get("authors", [])[:5]]
-                    pdf_url = ""
-                    if item.get("openAccessPdf"):
-                        pdf_url = item["openAccessPdf"].get("url", "")
                     paper_info = {
                         "paper_id": item.get("paperId", ""),
                         "title": item.get("title", ""),
@@ -261,7 +285,7 @@ class SemanticScholarTool(Tool):
                         "abstract": item.get("abstract", "")[:300] if item.get("abstract") else "",
                         "venue": item.get("venue", ""),
                         "citation_count": item.get("citationCount", 0),
-                        "pdf_url": pdf_url,
+                        "pdf_url": self._resolve_pdf_url(item),
                         "semantic_scholar_url": f"https://www.semanticscholar.org/paper/{item.get('paperId', '')}",
                     }
                     papers.append(paper_info)

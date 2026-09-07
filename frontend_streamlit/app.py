@@ -98,7 +98,29 @@ def page_new_task():
             help="输入年份（如 2020）只搜索该年份之后文献；输入 0 则不限年份",
         )
 
-        save_pdf = st.checkbox("📄 生成 PDF 文件", value=True)
+        col_a, col_b = st.columns(2)
+        with col_a:
+            per_source_limit = st.number_input(
+                "单源保留篇数",
+                min_value=1,
+                max_value=50,
+                value=10,
+                help="每个来源（arXiv / Semantic Scholar / Google Scholar）每次最多取多少篇",
+            )
+        with col_b:
+            final_limit = st.number_input(
+                "最终保留篇数",
+                min_value=1,
+                max_value=50,
+                value=10,
+                help="多源合并去重后对外保留多少篇",
+            )
+
+        papers_output_dir = st.text_input(
+            "下载论文保存位置（选填，可含文件名）",
+            value="",
+            help="留空则保存到 output/日期/主题/lit_source/。可填文件夹，或「文件夹\\文件名前缀.pdf」",
+        )
 
         submitted = st.form_submit_button("🚀 开始生成综述", use_container_width=True)
 
@@ -110,6 +132,21 @@ def page_new_task():
 
         year_from = str(year) if year > 0 else ""
 
+        def _split_save_path(raw: str) -> tuple[str, str]:
+            text = (raw or "").strip().strip('"')
+            if not text:
+                return "", ""
+            if not text.lower().endswith(".pdf"):
+                return text, ""
+            directory, filename = os.path.split(text)
+            return directory, filename
+
+        papers_dir, papers_name = _split_save_path(papers_output_dir)
+        if papers_name.lower().replace(".pdf", "") in {"标题__网址", "untitled", "未命名"}:
+            papers_name = ""
+        else:
+            papers_name = os.path.splitext(papers_name)[0]
+
         with st.spinner("正在提交任务..."):
             try:
                 resp = _api().post(
@@ -117,7 +154,11 @@ def page_new_task():
                     json={
                         "topic": topic.strip(),
                         "year_from": year_from,
-                        "save_pdf": save_pdf,
+                        "save_pdf": False,
+                        "per_source_limit": int(per_source_limit),
+                        "final_limit": int(final_limit),
+                        "papers_output_dir": papers_dir,
+                        "papers_filename": papers_name,
                     },
                     timeout=10,
                 )
@@ -225,18 +266,42 @@ def page_new_task():
                 else:
                     st.warning("最终答案为空")
 
+                papers_folder = result_data.get("papers_folder")
+                review_folder = result_data.get("review_folder")
                 pdf_path = result_data.get("pdf_path")
-                if pdf_path:
-                    filename = os.path.basename(pdf_path)
-                    pdf_url = f"{API_BASE}/api/output/{filename}"
-                    st.markdown("---")
-                    st.markdown(
-                        f"<a href='{pdf_url}' target='_blank' style='text-decoration:none;'>"
-                        f"<button style='padding:10px 28px;font-size:18px;cursor:pointer;"
-                        f"background:#4CAF50;color:white;border:none;border-radius:6px;'>"
-                        f"📄 下载 PDF 文件</button></a>",
-                        unsafe_allow_html=True,
-                    )
+                if papers_folder:
+                    st.caption(f"下载论文：`{papers_folder}`")
+                if pdf_path or review_folder:
+                    st.caption(f"综述已保存到：`{pdf_path or review_folder}`")
+
+                if final_answer and st.button("💾 保存 PDF", use_container_width=True):
+                    try:
+                        picked = _api().post(
+                            f"{API_BASE}/api/pick-save-path",
+                            json={
+                                "kind": "review",
+                                "topic": result_data.get("topic") or st.session_state.get("topic") or "",
+                            },
+                            timeout=120,
+                        )
+                        picked_data = picked.json() if picked.status_code == 200 else {}
+                        directory = (picked_data.get("directory") or "").strip()
+                        if directory:
+                            saved = _api().post(
+                                f"{API_BASE}/api/agent/save-pdf/{task_id}",
+                                json={
+                                    "review_output_dir": directory,
+                                    "review_filename": picked_data.get("filename") or "",
+                                },
+                                timeout=60,
+                            )
+                            if saved.status_code == 200:
+                                st.success(f"已保存到：{saved.json().get('pdf_path')}")
+                                st.rerun()
+                            else:
+                                st.error("保存失败")
+                    except (requests.ConnectionError, requests.ReadTimeout):
+                        st.error("无法打开保存对话框或连接后端失败")
 
             # 允许开始新任务（无论成功或出错）
             if st.button("🔄 生成新的综述", use_container_width=True):

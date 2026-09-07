@@ -35,18 +35,27 @@ class PDFParserTool(Tool):
         "properties": {
             "pdf_path": {"type": "string", "description": "Path to PDF file"},
             "extract_tables": {"type": "boolean", "description": "Extract tables from PDF (optional, default: true)"},
+            "extract_images": {"type": "boolean", "description": "Extract figures/images for multimodal RAG (default: true)"},
             "pages": {"type": "string", "description": "Specific pages to extract (e.g., '1-5', '1,3,5', optional)"},
         },
         "required": ["pdf_path"],
     }
 
-    def __init__(self, storage_path: str = "./storage/papers"):
+    def __init__(self, storage_path: str = "", figures_path: str = ""):
         """初始化 PDFParserTool。
         
         Args:
-            storage_path: 论文存储目录
+            storage_path: 论文目录（综述任务传入 lit_source）
+            figures_path: 插图目录（默认与论文目录同级的 figures）
         """
-        self.storage_path = Path(storage_path)
+        raw = (storage_path or "").strip()
+        self.storage_path = Path(raw) if raw else None
+        if figures_path:
+            self.figures_path = Path(figures_path)
+        elif self.storage_path is not None:
+            self.figures_path = self.storage_path.parent / "figures"
+        else:
+            self.figures_path = None
 
     def _parse_page_range(self, page_spec: str, total_pages: int) -> List[int]:
         """解析页面范围说明。
@@ -108,16 +117,74 @@ class PDFParserTool(Tool):
         
         return metadata
 
-    def _clean_text(self, text: str) -> str:
-        """清理提取的文本。
-        
-        Args:
-            text: 原始文本
-            
+    def _extract_images(
+        self,
+        pdf_path: Path,
+        max_images: int = 24,
+        min_side: int = 80,
+    ) -> List[Dict[str, Any]]:
+        """用 PyMuPDF 抽取插图，保存到 figures/<pdf_stem>/。
+
         Returns:
-            清理后的文本
+            [{image_id, path, page, width, height}, ...]
         """
-        # 移除多余的空格和换行
+        try:
+            import fitz  # PyMuPDF
+        except ImportError:
+            print("[WARN] 未安装 pymupdf，跳过图片抽取（pip install pymupdf）")
+            return []
+
+        fig_root = self.figures_path if self.figures_path is not None else pdf_path.parent.parent / "figures"
+        out_dir = Path(fig_root) / pdf_path.stem
+        out_dir.mkdir(parents=True, exist_ok=True)
+        results: List[Dict[str, Any]] = []
+
+        try:
+            doc = fitz.open(str(pdf_path))
+        except Exception as e:
+            print(f"[WARN] 打开 PDF 抽图失败: {e}")
+            return []
+
+        try:
+            for page_index in range(len(doc)):
+                if len(results) >= max_images:
+                    break
+                page = doc[page_index]
+                for img_i, img in enumerate(page.get_images(full=True)):
+                    if len(results) >= max_images:
+                        break
+                    xref = img[0]
+                    try:
+                        pix = fitz.Pixmap(doc, xref)
+                        if pix.n > 4:  # CMYK 等
+                            pix = fitz.Pixmap(fitz.csRGB, pix)
+                        w, h = pix.width, pix.height
+                        if w < min_side or h < min_side:
+                            continue
+                        # 过滤接近整页的扫描底图（太大且不像插图）
+                        if w * h > 8_000_000:
+                            continue
+                        image_id = f"p{page_index + 1}_{img_i}_{xref}"
+                        rel_name = f"{image_id}.png"
+                        save_path = out_dir / rel_name
+                        pix.save(str(save_path))
+                        results.append({
+                            "image_id": image_id,
+                            "path": str(save_path).replace("\\", "/"),
+                            "page": page_index + 1,
+                            "width": w,
+                            "height": h,
+                        })
+                    except Exception:
+                        continue
+        finally:
+            doc.close()
+
+        print(f"   [IMAGES] 抽取插图 {len(results)} 张 → {out_dir}")
+        return results
+
+    def _clean_text(self, text: str) -> str:
+        """清理提取的文本。"""
         lines = [line.strip() for line in text.split("\n")]
         lines = [line for line in lines if line]  # 移除空行
         return "\n".join(lines)
@@ -196,6 +263,7 @@ class PDFParserTool(Tool):
         """
         pdf_path_str = str(tool_input.get("pdf_path", "")).strip()
         extract_tables = tool_input.get("extract_tables", True)
+        extract_images = tool_input.get("extract_images", True)
         pages_spec = str(tool_input.get("pages", "")).strip()
         
         if not pdf_path_str:
@@ -205,18 +273,16 @@ class PDFParserTool(Tool):
         pdf_path = Path(pdf_path_str)
         if not pdf_path.is_absolute():
             found = None
-            
-            # 策略1: storage_path / pdf_path_str（处理纯文件名的情况）
-            candidate = self.storage_path / pdf_path_str
-            if candidate.exists():
-                found = candidate
-            
-            # 策略2: storage_path / just_basename（处理 agent 传入了路径前缀的情况）
-            if found is None:
-                basename = pdf_path.name
-                candidate2 = self.storage_path / basename
-                if candidate2.exists():
-                    found = candidate2
+
+            if self.storage_path is not None:
+                candidate = self.storage_path / pdf_path_str
+                if candidate.exists():
+                    found = candidate
+                if found is None:
+                    basename = pdf_path.name
+                    candidate2 = self.storage_path / basename
+                    if candidate2.exists():
+                        found = candidate2
             
             # 策略3: 使用 CWD 相对路径直接尝试
             if found is None and pdf_path.exists():
@@ -333,7 +399,15 @@ class PDFParserTool(Tool):
                 print(f"   [PAGE] 总页数: {total_pages}")
                 print(f"   [CHARS] 字符数: {result['content']['character_count']}")
                 print(f"   [TABLES] 表格数: {result['content']['table_count']}")
-                
+
+                images: List[Dict[str, Any]] = []
+                if extract_images:
+                    images = self._extract_images(pdf_path)
+                result["content"]["images"] = images
+                result["content"]["image_count"] = len(images)
+                if images:
+                    print(f"   [IMAGES] 插图数: {len(images)}")
+
                 return json.dumps(result, ensure_ascii=False, indent=2)
         
         except Exception as e:

@@ -3,14 +3,23 @@
 # 简化了原来的 ReAct 手写循环。
 import json
 import logging
+import re
 import sys
-from typing import Any, TypedDict
+from typing import Any, Callable, TypedDict
 
 from langgraph.graph import StateGraph, END
 from langgraph.constants import START
 
+from agent.memory import ResearchMemory
 from agent.models import AgentResult, AgentStep
-from agent.prompts import SYSTEM_PROMPT, build_user_prompt
+from agent.prompts import (
+    JSON_REPAIR_PROMPT,
+    REVIEW_MIN_CHARS,
+    REVIEW_WRITING_SPEC,
+    SYSTEM_PROMPT,
+    build_user_prompt,
+    review_meets_standard,
+)
 from llm_client import LitCraftAgentsLLM
 from tools.registry import ToolRegistry
 from utils.logger import get_logger
@@ -22,6 +31,8 @@ class AgentState(TypedDict):
     """LangGraph 状态定义：记录 Agent 执行过程中的所有信息。"""
     topic: str
     year_from: str
+    per_source_limit: int
+    final_limit: int
     steps: list[AgentStep]
     current_thought: str
     current_action: str
@@ -30,6 +41,7 @@ class AgentState(TypedDict):
     is_final: bool
     final_answer: str
     step_count: int
+    memory: dict
 
 
 class LangGraphAgent:
@@ -42,6 +54,8 @@ class LangGraphAgent:
         max_steps: int = 6,
         temperature: float = 0,
         year_from: str = "",
+        on_step: Callable[[AgentStep], None] | None = None,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         """初始化 Agent，构建 LangGraph 状态图。"""
         self.llm = llm
@@ -49,9 +63,34 @@ class LangGraphAgent:
         self.max_steps = max_steps
         self.temperature = temperature
         self.year_from = year_from
+        self.on_step = on_step
+        self.on_progress = on_progress
         
         # 构建 LangGraph 状态图
         self.graph = self._build_graph()
+
+    def _emit_step(self, state: AgentState, step: AgentStep) -> None:
+        """追加一步并回调（供前端实时进度）。"""
+        state["steps"].append(step)
+        if self.on_step is None:
+            return
+        try:
+            self.on_step(step)
+        except Exception:
+            logger.exception("on_step 回调失败（忽略，不影响主流程）")
+
+    def _emit_progress(self, *, thought: str, action: str, action_input: dict) -> None:
+        """工具开始执行时通知前端（不写入 Agent scratchpad）。"""
+        if self.on_progress is None:
+            return
+        try:
+            self.on_progress({
+                "thought": thought or "",
+                "action": action,
+                "action_input": action_input or {},
+            })
+        except Exception:
+            logger.exception("on_progress 回调失败（忽略）")
 
     def _build_graph(self):
         """构建 LangGraph 状态图，定义 nodes 和 edges。"""
@@ -90,18 +129,27 @@ class LangGraphAgent:
         print(f"  [AGENT] 📋 主题: {state['topic'][:80]}", flush=True, file=sys.stderr)
         print(f"{'='*60}", flush=True, file=sys.stderr)
 
-        logger.info("步骤 %d | 开始思考", step_num)
+        mem = ResearchMemory(state.get("memory"))
         user_prompt = build_user_prompt(
             topic=state["topic"],
             tools=self.tools,
             scratchpad=self._build_scratchpad(state["steps"]),
             year_from=state["year_from"],
+            per_source_limit=int(state.get("per_source_limit") or 10),
+            final_limit=int(state.get("final_limit") or 10),
+            memory_block=mem.render(
+                per_source_limit=int(state.get("per_source_limit") or 10),
+                final_limit=int(state.get("final_limit") or 10),
+            ),
         )
         try:
             raw_response = self.llm.chat(
                 system_prompt=SYSTEM_PROMPT,
                 user_prompt=user_prompt,
                 temperature=self.temperature,
+                max_tokens=1024,
+                json_mode=True,
+                stop=["下一步指示", "请告知您下一步"],
             )
         except Exception as e:
             logger.error("LLM 调用失败 | error=%s", str(e), exc_info=True)
@@ -115,7 +163,29 @@ class LangGraphAgent:
             )
             return state
 
-        decision = self._parse_decision(raw_response)
+        try:
+            decision = self._parse_decision(raw_response)
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.warning("决策不是 JSON，进行一次纠错重试 | error=%s | preview=%s", e, (raw_response or "")[:160])
+            print("  [AGENT] ⚠ 未得到 JSON，按协议纠错重试一次…", flush=True, file=sys.stderr)
+            try:
+                repaired = self.llm.chat(
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=JSON_REPAIR_PROMPT + (raw_response or "")[:400],
+                    temperature=0,
+                    max_tokens=1024,
+                    json_mode=True,
+                    stop=["下一步指示", "请告知您下一步"],
+                )
+                decision = self._parse_decision(repaired)
+            except Exception as e2:
+                logger.warning("纠错后仍不是 JSON | error=%s", e2)
+                print("  [AGENT] ⚠ 纠错失败，本步记为无效", flush=True, file=sys.stderr)
+                decision = {
+                    "thought": (raw_response or "")[:200],
+                    "action": "",
+                    "action_input": {},
+                }
 
         thought = str(decision.get("thought", "")).strip()
         state["current_thought"] = thought
@@ -159,7 +229,8 @@ class LangGraphAgent:
             logger.info("步骤 %d | 生成最终答案 | 长度=%d",
                         state["step_count"], len(state["final_answer"]))
         else:
-            # 解析 action 和 action_input
+            # 解析 action 和 action_input（兼容 OpenAI 风格 name/parameters）
+            decision = self._normalize_tool_decision(decision)
             action = str(decision.get("action", "")).strip()
             action_input = decision.get("action_input", {})
             if not isinstance(action_input, dict):
@@ -172,16 +243,21 @@ class LangGraphAgent:
             if not action_input or all(v == "" for v in action_input.values()):
                 top_level_params = {
                     k: v for k, v in decision.items()
-                    if k not in ("action", "thought", "final_answer", "action_input", "observation")
+                    if k not in (
+                        "action", "thought", "final_answer", "action_input",
+                        "observation", "name", "parameters", "tool", "arguments",
+                    )
                 }
                 if top_level_params:
                     action_input = top_level_params
                     logger.info("从顶层提取 action_input 参数: %s", str(top_level_params)[:120])
 
-            # 如果 action_input 里只有 "parameters" 一个键，展开它
-            if "parameters" in action_input and isinstance(action_input["parameters"], dict):
-                action_input = action_input["parameters"]
-                logger.info("展开 parameters 参数: %s", str(action_input)[:120])
+            # 如果 action_input 里只有 "parameters"/"arguments" 一个键，展开它
+            for nest_key in ("parameters", "arguments"):
+                if nest_key in action_input and isinstance(action_input[nest_key], dict):
+                    action_input = action_input[nest_key]
+                    logger.info("展开 %s 参数: %s", nest_key, str(action_input)[:120])
+                    break
 
             # ── 展开 LLM 常用的 `input` 嵌套 ──────────────────
             # LLM 常把参数包在 input 键里：{"action": "search", "input": {"query": "..."}}
@@ -193,27 +269,41 @@ class LangGraphAgent:
                         action_input[k] = v
                 logger.info("展开 input 嵌套: %s", str(action_input)[:120])
 
-            # ── 工具名合法性 + 搜索查询覆盖 ────────────────────
-            # LLM（尤其小模型）经常编造不存在的工具名。
-            # 先自动纠错，如果纠错无效再由工具执行报错+循环检测兜底。
             topic_raw = state.get("topic", "").strip()
             if action:
-                corrected = self._autocorrect_tool_name(action)
+                corrected = self._resolve_tool_name(action)
                 if corrected != action:
-                    logger.warning("自动纠错工具名: %s → %s", action, corrected)
-                    print(f"  [AGENT] 🔄 工具名自动纠错: '{action}' → '{corrected}'", flush=True, file=sys.stderr)
+                    logger.info("工具名映射: %s → %s", action, corrected)
                     action = corrected
 
-            # 搜索查询：允许 LLM 使用自己的 query（DeepSeek 可自主选英文关键词）
-            # 仅在 LLM 未提供 query 时兜底使用用户主题
+            # 缺省补全：不改写模型已给出的 query / 策略参数
             if self._is_search_action(action):
-                llm_query = action_input.get("query", "").strip()
-                if not llm_query and topic_raw:
+                if not str(action_input.get("query") or "").strip() and topic_raw:
                     action_input["query"] = topic_raw
-                    logger.info("LLM 未提供搜索词，兜底使用用户主题: %.80s", topic_raw[:80])
-                elif llm_query:
-                    logger.info("LLM 自主搜索词: %.80s", llm_query[:80])
-                action_input.pop("year_from", None)
+                user_year = str(state.get("year_from") or "").strip()
+                if user_year.isdigit():
+                    if str(action_input.get("year_from") or "").strip() != user_year:
+                        logger.info("年份以用户设置为准: %s → %s", action_input.get("year_from"), user_year)
+                    action_input["year_from"] = user_year
+                else:
+                    invented = action_input.pop("year_from", None)
+                    action_input.pop("year", None)
+                    if invented not in (None, "", 0, "0"):
+                        print(
+                            f"  [AGENT] 用户未限制年份，已忽略模型自填的 year_from={invented}",
+                            flush=True,
+                            file=sys.stderr,
+                        )
+                        logger.info("忽略模型自填 year_from=%s（用户未限制年份）", invented)
+                per_source = int(state.get("per_source_limit") or 0)
+                final_n = int(state.get("final_limit") or 0)
+                if "multi_source" in (action or "").lower():
+                    if final_n > 0 and "limit" not in action_input:
+                        action_input["limit"] = final_n
+                    if per_source > 0 and "per_source_limit" not in action_input:
+                        action_input["per_source_limit"] = per_source
+                elif per_source > 0 and "limit" not in action_input:
+                    action_input["limit"] = per_source
 
             state["current_action"] = action
             state["current_action_input"] = action_input
@@ -237,14 +327,24 @@ class LangGraphAgent:
         print(f"  [AGENT] 🔧 第 {step_num}/{self.max_steps} 步 — 正在执行: {action}", flush=True, file=sys.stderr)
         print(f"{'─'*60}", flush=True, file=sys.stderr)
 
-        # 强制注入 year_from：将用户指定的年份覆盖到搜索工具的 action_input 中
-        year_from = state.get("year_from", "")
-        if year_from and self._is_search_action(action):
-            action_input["year_from"] = year_from
-            print(f"  [INJECT] 强制设置 {action} 的 year_from={year_from}", flush=True, file=sys.stderr)
-        
-        # ── 参数名归一化：LLM 经常用单数/错误名 ──
-        # source → sources, limit → max_results, query → query (不变)
+        if not action:
+            observation = json.dumps(
+                {
+                    "error": "missing_action",
+                    "message": "这一步没有 action。请返回带 action 的工具调用，或返回 final_answer。",
+                },
+                ensure_ascii=False,
+            )
+            state["current_observation"] = observation
+            self._emit_step(state, AgentStep(
+                thought=state.get("current_thought") or "",
+                action="",
+                action_input=action_input,
+                observation=observation,
+            ))
+            return state
+
+        # 参数名别名（不改变语义，只对齐 schema）
         param_aliases = {
             "source": "sources",
             "year": "year_from",
@@ -253,18 +353,47 @@ class LangGraphAgent:
         for wrong, correct in param_aliases.items():
             if wrong in action_input and correct not in action_input:
                 action_input[correct] = action_input.pop(wrong)
-        # sources 应该是列表，LLM 可能给字符串
         if "sources" in action_input and isinstance(action_input["sources"], str):
             action_input["sources"] = [action_input["sources"]]
-        
+
+        # 同一 query 或已达互补检索上限时跳过，避免 20 步全在搜同一句话
+        if self._is_web_search_action(action):
+            mem = ResearchMemory(state.get("memory"))
+            query = str(action_input.get("query") or "").strip()
+            allowed, reason = mem.can_web_search(query)
+            if not allowed:
+                observation = json.dumps(
+                    {
+                        "status": "skipped_redundant_search",
+                        "paper_count": len(mem.papers),
+                        "queries": mem.queries,
+                        "message": reason,
+                    },
+                    ensure_ascii=False,
+                )
+                print(f"  [AGENT] ⏭ 跳过联网搜索 | {reason[:80]}", flush=True, file=sys.stderr)
+                state["current_observation"] = observation
+                self._emit_step(state, AgentStep(
+                    thought=state.get("current_thought") or "",
+                    action=action,
+                    action_input=action_input,
+                    observation=observation,
+                ))
+                return state
+
         # 执行工具
+        self._emit_progress(
+            thought=state.get("current_thought") or "",
+            action=action,
+            action_input=action_input,
+        )
         try:
             logger.info("步骤 %d | 执行工具 %s | input=%s",
                         state["step_count"], action, str(action_input)[:200])
             observation = self.tools.run(action, action_input)
         except Exception as e:
             logger.error("工具 %s 执行失败 | error=%s", action, str(e), exc_info=True)
-            raise
+            observation = json.dumps({"error": str(e), "action": action}, ensure_ascii=False)
 
         state["current_observation"] = observation
 
@@ -272,154 +401,144 @@ class LangGraphAgent:
         print(f"  [AGENT] ✅ 第 {step_num}/{self.max_steps} 步 — {action} 执行完毕", flush=True, file=sys.stderr)
         print(f"  [AGENT]   ╰ 结果: {obs_preview}", flush=True, file=sys.stderr)
 
-        # 记录这一步
-        step = AgentStep(
+        self._emit_step(state, AgentStep(
             thought=state["current_thought"],
             action=action,
             action_input=action_input,
             observation=observation,
+        ))
+        mem = ResearchMemory(state.get("memory"))
+        mem.ingest(action, action_input or {}, observation)
+        state["memory"] = mem.to_dict()
+        logger.info(
+            "步骤 %d | 工具完成 | observation_len=%d | memory_papers=%d",
+            state["step_count"], len(str(observation)), len(mem.papers),
         )
-        state["steps"].append(step)
-
-        # ── 工具结果失败检测（不限工具类型） ─────────────────────
-        # 如果工具返回了错误/空结果，注入系统提示引导 LLM 转向不同的操作。
-        # 不区分搜索工具还是下载工具——任何工具连续失败都应干预。
-        result_is_empty = self._result_is_empty(str(observation))
-        result_is_error = self._result_is_error(str(observation))
-
-        if result_is_empty or result_is_error:
-            fail_type = "错误" if result_is_error else "空结果"
-            consecutive_fail = 0
-            for s in reversed(state["steps"]):
-                if s.action is None:
-                    continue
-                # 同类型工具失败才算连续（搜索/下载/解析等不同类型互不影响）
-                if self._result_is_empty(str(s.observation or "")) or self._result_is_error(str(s.observation or "")):
-                    consecutive_fail += 1
-                else:
-                    break
-
-            print(f"  [AGENT] ⚠ 第 {step_num}/{self.max_steps} 步 — {action} 返回{fail_type}", flush=True, file=sys.stderr)
-            print(f"  [AGENT]   ╰ 连续失败次数: {consecutive_fail}", flush=True, file=sys.stderr)
-
-            # 注入系统提示
-            if consecutive_fail <= 3:
-                guidance = (
-                    f"⚠️ 工具「{action}」返回了{fail_type}，请换用其他操作或关键词。"
-                    f"不要重复调用同一个失败的工具。"
-                )
-            else:
-                guidance = (
-                    f"⚠️ 工具「{action}」已连续 {consecutive_fail} 次返回{fail_type}，"
-                    f"请停止尝试该操作，转为使用其他可用工具，或直接输出 final_answer 结束。"
-                )
-            state["steps"].append(AgentStep(
-                thought="[系统提示] " + guidance,
-                action=None,
-            ))
-            logger.info("步骤 %d | 工具失败检测(%d次连续) → 已注入提示",
-                        state["step_count"], consecutive_fail)
-
-            # ── 强制兜底结束 ──────────────────────────────────
-            if consecutive_fail >= 5:
-                logger.warning("步骤 %d | 连续%d次工具失败 → 标记强制结束",
-                               state["step_count"], consecutive_fail)
-                state["is_final"] = True
-                state["final_answer"] = ""
-
-        logger.info("步骤 %d | 工具完成 | observation_len=%d",
-                    state["step_count"], len(str(observation)))
         return state
 
-    def _result_is_empty(self, obs: str) -> bool:
-        """检查工具返回结果是否为空（0 篇论文）或工具调用失败（不存在/出错）。"""
-        # 搜索成功但返回 0 篇论文
-        empty_patterns = [
-            '"total_count": 0',   # json.dumps(indent=2)
-            '"total_count":0',    # json.dumps(indent=None)
-            '"papers": []',       # 空论文列表
-            '"success": []',      # 无成功来源
-        ]
-        # 工具调用失败（编造的工具名）— 支持英文和中文消息
-        not_found_patterns = ["Tool '", "not found", "未知工具调用"]
-        # 工具返回错误（空查询、速率限制、超时等）
-        error_pattern = '"error":'
-
-        return (
-            any(p in obs for p in empty_patterns)
-            or any(p in obs for p in not_found_patterns)
-            or error_pattern in obs
-        )
-
-    def _result_is_error(self, obs: str) -> bool:
-        """检查工具返回结果是否明确标记为错误（与空结果区分）。
-        
-        有些工具返回的错误信息不含 `"error":` JSON 格式（如工具执行异常），
-        需要额外检测 HTTP 错误/异常描述等模式。
-        """
-        error_patterns = [
-            "HTTP Error", "Timeout", "timeout", "速率限制",
-            "Rate limit", "429", "500", "503",
-            "Connection", "connection", "Read timed out",
-            "File I/O error", "No such file",
-        ]
-        return any(p in obs for p in error_patterns)
+    def _is_web_search_action(self, action: str) -> bool:
+        return (action or "") in {
+            "multi_source_search", "arxiv_search", "semantic_scholar", "google_scholar",
+            "openalex", "crossref", "europe_pmc",
+        }
 
     def _is_search_action(self, action: str) -> bool:
-        """判断是否为搜索类工具。"""
-        action_lower = action.lower()
-        search_keywords = {"search", "retriev", "arxiv", "scholar"}
-        return any(kw in action_lower for kw in search_keywords)
+        """联网搜索类工具（不含本地 advanced_search）。"""
+        return self._is_web_search_action(action)
 
-    def _autocorrect_tool_name(self, name: str) -> str:
-        """自动纠错 LLM 编造的工具名为真实工具名。
-        
-        qwen2:7b 等小模型经常记不住 prompt 中的工具名，
-        会编造 download_papers、search_arxiv 等变体。
-        这里做模糊匹配：优先精确匹配，失败则尝试关键词映射。
-        LLM 对此完全无感知。
+    @staticmethod
+    def _compact_observation_for_prompt(action: str, obs: str) -> str:
+        """搜索观察太大时只保留篇数、题录和入库信息，避免截断后模型以为没搜到。"""
+        if not obs or not action:
+            return obs or ""
+        raw = obs.strip()
+        if not raw.startswith("{"):
+            brace = raw.find("{")
+            if brace < 0:
+                return obs
+            raw = raw[brace:]
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return obs
+        if not isinstance(data, dict):
+            return obs
+        papers = data.get("papers") or data.get("results") or data.get("documents") or []
+        if not isinstance(papers, list) or not papers:
+            return obs
+        compact_papers = []
+        for paper in papers[:15]:
+            if not isinstance(paper, dict):
+                continue
+            compact_papers.append({
+                "title": paper.get("title") or paper.get("paper_title"),
+                "year": paper.get("year"),
+                "url": paper.get("url") or paper.get("pdf_url"),
+                "local_path": paper.get("local_path"),
+                "abstract": str(paper.get("abstract") or paper.get("snippet") or paper.get("text") or "")[:180],
+            })
+        compact = {
+            "query": data.get("query"),
+            "total_count": data.get("total_count", len(compact_papers)),
+            "indexed_chunks": data.get("indexed_chunks"),
+            "source_summary": data.get("source_summary"),
+            "papers": compact_papers,
+        }
+        if data.get("status"):
+            compact["status"] = data.get("status")
+            compact["message"] = data.get("message")
+        return json.dumps(compact, ensure_ascii=False)
+
+    @staticmethod
+    def _normalize_tool_decision(decision: dict[str, Any]) -> dict[str, Any]:
+        """把 OpenAI / 通用 function-calling 风格归一成 action + action_input。
+
+        兼容：
+        - {"name": "tool", "parameters": {...}}
+        - {"tool": "tool", "arguments": {...}}
+        - {"function": {"name": "...", "arguments": {...}}}
         """
-        # 精确匹配 → 直接用
+        if not isinstance(decision, dict):
+            return {}
+
+        out = dict(decision)
+
+        # OpenAI ChatCompletions tool call 嵌套
+        fn = out.get("function")
+        if isinstance(fn, dict):
+            if not out.get("action") and fn.get("name"):
+                out["action"] = fn.get("name")
+            args = fn.get("arguments")
+            if args is not None and not out.get("action_input"):
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except Exception:
+                        args = {"input": args}
+                if isinstance(args, dict):
+                    out["action_input"] = args
+
+        if not out.get("action"):
+            for key in ("name", "tool", "tool_name", "function_name"):
+                val = out.get(key)
+                if isinstance(val, str) and val.strip():
+                    out["action"] = val.strip()
+                    break
+
+        if not out.get("action_input"):
+            for key in ("parameters", "arguments", "args", "input"):
+                val = out.get(key)
+                if isinstance(val, dict):
+                    out["action_input"] = val
+                    break
+                if isinstance(val, str) and val.strip():
+                    try:
+                        parsed = json.loads(val)
+                        if isinstance(parsed, dict):
+                            out["action_input"] = parsed
+                            break
+                    except Exception:
+                        pass
+
+        return out
+
+    def _resolve_tool_name(self, name: str) -> str:
+        """只做精确名和少数常见别名映射，不把任意 search* 吞成同一工具。"""
         if name in self.tools._tools:
             return name
-
-        name_lower = name.lower()
-
-        # 关键词 → 真实工具名映射（内部自动纠错，不暴露给 LLM）
-        correction_map: list[tuple[list[str], str | None]] = [
-            # 下载类变体（download_papers、save_papers、fetch 等）
-            (["download", "save", "fetch"], "paper_downloader"),
-            # 搜索类变体（search_arxiv → arxiv_search 等）
-            (["search_arxiv", "arxivsearch", "arxiv-search"], "arxiv_search"),
-            (["search_semantic", "semanticsearch", "semantic-search"], "semantic_scholar"),
-            (["search_google", "googlescholar", "google-search"], "google_scholar"),
-            (["search_paper", "searchpaper", "search_for_paper", "search_for"], "multi_source_search"),
-            # 解析类变体
-            (["parse_pdf", "pdf_extract", "extract_pdf"], "pdf_parser"),
-            # 分块类变体
-            (["chunk_text", "split_text", "text_split"], "text_chunker"),
-            # 存储类变体
-            (["vector_search", "store_vector", "chroma_search"], "vector_store"),
-            # 检索类变体
-            (["hybrid_search", "rag_search", "retrieve"], "advanced_search"),
-            # 分析/总结类变体 — 提示应使用 final_answer
-            (["analyze", "summarize_result", "organize"], None),
-            # 停止类变体 — 返回 None 表示不纠错，让失败检测兜底
-            (["stop_search", "cancel", "exit", "stop"], None),
-        ]
-
-        for keywords, target in correction_map:
-            if any(kw in name_lower for kw in keywords):
-                if target is None:
-                    return name
-                return target
-
-        # ── 兜底：含 "search" 或 "find" 的未知工具名 → multi_source_search
-        # 覆盖任何 LLM 编造的搜索类变体（search_for_paper、search_paper等）
-        if "search" in name_lower or "find" in name_lower:
-            return "multi_source_search"
-
-        return name
+        aliases = {
+            "arxiv": "arxiv_search",
+            "s2": "semantic_scholar",
+            "semantic-scholar": "semantic_scholar",
+            "google-scholar": "google_scholar",
+            "scholar": "google_scholar",
+            "multi_search": "multi_source_search",
+            "hybrid_search": "advanced_search",
+            "retrieve": "advanced_search",
+            "download_pdf": "paper_downloader",
+            "parse_pdf": "pdf_parser",
+        }
+        return aliases.get(name.lower().replace(" ", "_"), name)
 
     def _build_fallback_review(self, topic: str, steps: list[AgentStep]) -> str:
         """LLM 不可用时，基于已搜索到的论文生成兜底答案。"""
@@ -440,14 +559,114 @@ class LangGraphAgent:
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        parts = [f"## 研究背景\n\n{topic}是当前计算机视觉与智能交通领域的重要研究方向。\n"]
+        parts = [f"## 已收集到的题录\n\n主题：{topic}\n"]
         if titles:
-            parts.append("## 相关文献\n\n")
+            parts.append("\n")
             for i, t in enumerate(titles, 1):
                 parts.append(f"- [{i}] {t}\n")
-        parts.append(f"\n共检索到 {len(titles)} 篇相关文献。由于 LLM 服务暂不可用，"
-                     "无法自动生成完整综述文本。请稍后重试。\n")
+        else:
+            parts.append("\n本次尚未从工具中获得论文题录。\n")
+        parts.append("\n当前大模型服务不可用，无法继续生成综述正文。请稍后重试。\n")
         return "".join(parts)
+
+    @staticmethod
+    def _unwrap_markdown(text: str) -> str:
+        t = (text or "").strip()
+        if t.startswith("```"):
+            t = re.sub(r"^```(?:markdown|md)?\s*", "", t, flags=re.I)
+            t = re.sub(r"\s*```$", "", t)
+        return t.strip()
+
+    def _collect_papers_from_steps(self, steps: list[AgentStep]) -> list[dict[str, Any]]:
+        """从工具观察中收集去重后的论文题录。"""
+        seen: set[str] = set()
+        papers: list[dict[str, Any]] = []
+        for step in steps or []:
+            if not step.observation:
+                continue
+            raw = str(step.observation).strip()
+            if not raw.startswith("{"):
+                brace = raw.find("{")
+                if brace < 0:
+                    continue
+                raw = raw[brace:]
+            try:
+                data = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            items = data.get("papers") or data.get("results") or data.get("documents") or []
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title") or item.get("paper_title") or "").strip()
+                if not title:
+                    continue
+                key = title.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                papers.append(item)
+        return papers
+
+    def _compose_review(
+        self,
+        topic: str,
+        steps: list[AgentStep],
+        extra_papers: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """根据研究记忆与轨迹写一篇符合体例的综述（Markdown，不走 JSON）。"""
+        papers = self._collect_papers_from_steps(steps)
+        seen = {
+            str(p.get("title") or p.get("paper_title") or "").strip().lower()
+            for p in papers
+        }
+        for paper in extra_papers or []:
+            title = str(paper.get("title") or paper.get("paper_title") or "").strip()
+            if title and title.lower() not in seen:
+                seen.add(title.lower())
+                papers.append(paper)
+        lines = [f"研究主题：{topic}", "", "本次检索到的文献（只能引用这些，禁止编造）："]
+        if not papers:
+            lines.append("（没有题录。请明确写未检索到可用文献，不要编造。）")
+        else:
+            for i, paper in enumerate(papers, 1):
+                title = paper.get("title") or paper.get("paper_title") or ""
+                year = paper.get("year") or ""
+                authors = paper.get("authors") or ""
+                if isinstance(authors, list):
+                    authors = ", ".join(str(a) for a in authors[:8])
+                venue = paper.get("venue") or paper.get("journal") or ""
+                abstract = str(paper.get("abstract") or paper.get("snippet") or paper.get("text") or "")[:800]
+                url = paper.get("url") or paper.get("pdf_url") or ""
+                lines.append(
+                    f"[{i}] {title} ({year}) | {authors} | {venue}\n"
+                    f"    链接: {url}\n"
+                    f"    摘要/片段: {abstract or '（观察中无摘要）'}"
+                )
+        evidence = "\n".join(lines)
+        if len(evidence) > 14000:
+            evidence = evidence[:14000] + "\n…（证据已截断）"
+
+        user_prompt = (
+            f"{evidence}\n\n"
+            f"{REVIEW_WRITING_SPEC}\n"
+            "请直接输出完整 Markdown 综述，不要 JSON，不要代码围栏。"
+        )
+        raw = self.llm.chat(
+            system_prompt=(
+                "你是学术文献综述作者。只根据用户提供的检索文献写作；"
+                "必须满足给定体例和字数。"
+            ),
+            user_prompt=user_prompt,
+            temperature=0.4,
+            timeout=600,
+            max_tokens=8192,
+        )
+        return self._unwrap_markdown(raw)
 
     def _end_node(self, state: AgentState) -> AgentState:
         """结束节点：记录最终步骤（不包含 action）。"""
@@ -458,140 +677,39 @@ class LangGraphAgent:
         print(f"{'='*60}\n", flush=True, file=sys.stderr)
         # 记录最后的思考步骤
         step = AgentStep(thought=state["current_thought"])
-        state["steps"].append(step)
+        self._emit_step(state, step)
         logger.info("Agent 结束 | 总步骤数=%d", state["step_count"])
         return state
-    def _should_end(self, state: AgentState) -> str:
-        """条件判断：是否应该结束循环。
 
-        返回值：
-            "end"   → 结束整个流程
-            "tool"  → 执行当前选择的工具
-            "think" → 跳过工具执行，直接回到思考节点（用于强制重试）
-        """
-        # 如果达到最大步数，强制结束
+    def _should_end(self, state: AgentState) -> str:
+        """ReAct 循环出口：模型给出 final_answer，或达到步数上限。"""
         if state["step_count"] >= self.max_steps:
             return "end"
-
-        # ── 连续空搜索/错误过多 → 强制兜底结束 ─────────────────
-        consecutive_empty = self._count_consecutive_empty_searches(state)
-        if consecutive_empty >= 5:
-            logger.warning("步骤 %d | 连续%d次空搜索/错误 → 强制结束",
-                           state["step_count"], consecutive_empty)
-            return "end"
-
-        # ── 连续重复的失败工具调用 → 强制兜底结束 ────────────
-        # LLM 可能卡在调用同一个不存在的工具（如 download_pdfs）上循环，
-        # 即使不是搜索工具，连续失败也应强制结束。
-        consecutive_fail = self._count_consecutive_identical_failures(state)
-        if consecutive_fail >= 3:
-            logger.warning("步骤 %d | 连续%d次相同失败动作 → 强制结束",
-                           state["step_count"], consecutive_fail)
-            return "end"
-
-        # 如果 LLM 想返回最终答案，先检查是否过早放弃
         if state["is_final"]:
-            search_count = sum(
-                1 for s in state["steps"]
-                if s.action and "search" in s.action.lower()
-            )
-            # 如果搜索次数 < 2 且最后一步观察是空结果 → 判定为过早放弃，强制继续尝试
-            if search_count < 2 and self._last_search_was_empty(state):
-                logger.warning(
-                    "检测到过早放弃：仅尝试 %d 次搜索且结果为空，"
-                    "覆盖 LLM 的 final_answer 决策，强制继续搜索",
-                    search_count
-                )
-                state["is_final"] = False
-                state["final_answer"] = ""
-                state["current_action"] = ""
-                state["current_action_input"] = {}
-                state["current_thought"] = (
-                    "⚠️ 上一步搜索返回了 0 篇论文，但仅仅尝试一次搜索就放弃为时过早。"
-                    "请换用不同的关键词（如英文关键词）重新搜索，至少尝试 2~3 种不同查询后再做决定。"
-                )
-                # 将提示注入到 steps 中，这样 LLM 在下一轮 scratchpad 里能看到这条消息
-                state["steps"].append(AgentStep(
-                    thought="[系统提示] " + state["current_thought"]
-                ))
-                return "think"  # 跳过 tool 节点，直接回到 think 重新决策
-
             return "end"
-
         return "tool"
 
-    def _last_search_was_empty(self, state: AgentState) -> bool:
-        """检查最后一步搜索是否返回了 0 篇论文或全部来源均失败。"""
-        steps = state["steps"]
-        if not steps:
-            return False
-        last_step = steps[-1]
-        if not last_step.observation:
-            return False
-        obs = str(last_step.observation)
-        # 检查多种观测格式：total_count 为 0、papers 为空数组、所有来源失败
-        patterns = [
-            '"total_count": 0',      # json.dumps(indent=2) 格式
-            '"total_count":0',       # json.dumps(indent=None) 格式
-            '"papers": []',          # 空论文列表
-            '"success": []',         # 无成功来源
-        ]
-        not_found = any(p in obs for p in ["Tool '", "not found", "未知工具调用"])
-        is_error = '"error":' in obs
-        is_empty = any(p in obs for p in patterns) or not_found or is_error
-        logger.debug("_last_search_was_empty: action=%s | is_empty=%s | obs_preview=%s",
-                     last_step.action, is_empty, obs[:120])
-        return is_empty
-
-    def _count_consecutive_empty_searches(self, state: AgentState) -> int:
-        """从 steps 末尾向前追溯，统计连续空搜索/错误结果的步数（跳过系统提示步骤）。"""
-        steps = state["steps"]
-        count = 0
-        for s in reversed(steps):
-            if s.action is None:
-                continue  # 跳过系统提示步骤
-            if not self._is_search_action(s.action or ""):
-                break
-            if self._result_is_empty(str(s.observation or "")):
-                count += 1
-            else:
-                break
-        return count
-
-    def _count_consecutive_identical_failures(self, state: AgentState) -> int:
-        """统计连续相同工具调用失败的次数（任意工具类型）。
-        
-        用于检测 LLM 卡在重复调用同一不存在的工具（如 download_pdfs）的循环。
-        只统计 steps 中已执行的步骤（有 observation 的），返回连续相同 action 且
-        结果视为失败的次数。
-        """
-        steps = state["steps"]
-        count = 0
-        last_action = None
-        for s in reversed(steps):
-            if s.action is None:
-                continue
-            if last_action is None:
-                last_action = s.action
-            if s.action != last_action:
-                break
-            if self._result_is_empty(str(s.observation or "")):
-                count += 1
-            else:
-                break
-        return count
-
-    def run(self, topic: str, year_from: str = "") -> AgentResult:
+    def run(
+        self,
+        topic: str,
+        year_from: str = "",
+        per_source_limit: int = 10,
+        final_limit: int = 10,
+    ) -> AgentResult:
         """执行 Agent：调用 LangGraph 状态图处理输入。
         
         Args:
             topic: 研究主题
             year_from: 年份过滤条件，只搜索该年份之后的文献（空字符串表示不限制）
+            per_source_limit: 每个学术源单次最多保留篇数
+            final_limit: 多源合并后最终对外保留篇数
         """
         effective_year = year_from or self.year_from
         initial_state = AgentState(
             topic=topic,
             year_from=effective_year,
+            per_source_limit=max(1, min(int(per_source_limit or 10), 50)),
+            final_limit=max(1, min(int(final_limit or 10), 50)),
             steps=[],
             current_thought="",
             current_action="",
@@ -600,68 +718,211 @@ class LangGraphAgent:
             is_final=False,
             final_answer="",
             step_count=0,
+            memory=ResearchMemory().to_dict(),
         )
         
         # 执行图
         final_state = self.graph.invoke(initial_state)
         
-        # 处理最终答案
-        final_answer = final_state["final_answer"]
-        if not final_answer:
-            # 达到最大步数但 LLM 未返回 final_answer → 强制 LLM 根据已有信息生成综述
-            logger.warning("达到最大步数 %d 但未生成 final_answer，强制 LLM 汇总", self.max_steps)
-            scratchpad = self._build_scratchpad(final_state["steps"])
-            forced_prompt = (
-                f"## 研究主题\n{final_state['topic']}\n\n"
-                f"## 已收集到的信息\n"
-                f"{scratchpad if scratchpad else '（暂无搜索结果，请基于已有知识回答）'}\n\n"
-                f"## 指令\n"
-                f"由于达到了最大执行步数，无法继续搜索新信息。请**基于以上已收集的信息**，"
-                f"生成一份完整的文献综述。要求：\n"
-                f"1. 如果没有任何搜索结果，请注明「搜索受限，以下内容基于已有知识编写」\n"
-                f"2. 格式规范，包含引言、主体、结论\n"
-                f"3. 引用已有论文信息\n"
-                f"4. 用中文撰写，字数不少于 500 字\n\n"
-                f"直接输出综述正文，不要额外解释。"
+        # 有文献则单独成稿（不在 ReAct JSON 里写 3000 字，避免又慢又被超时重跑）
+        final_answer = self._unwrap_markdown(final_state.get("final_answer") or "")
+        mem = ResearchMemory(final_state.get("memory"))
+        papers = mem.papers or self._collect_papers_from_steps(final_state["steps"])
+        paper_count = len(papers)
+        need_compose = paper_count > 0 or not review_meets_standard(final_answer, paper_count)
+        if need_compose and paper_count > 0:
+            logger.info("开始成稿 | papers=%d | draft_chars=%d", paper_count, len(final_answer))
+            print(
+                f"  [AGENT] 检索结束，正在撰写综述（约 {REVIEW_MIN_CHARS} 字，本地模型可能需要数分钟）…",
+                flush=True, file=sys.stderr,
+            )
+            self._emit_progress(
+                thought="检索已结束，正在按体例撰写综述正文，请稍候。",
+                action="write_review",
+                action_input={"min_chars": REVIEW_MIN_CHARS, "papers": paper_count},
             )
             try:
-                forced_answer = self.llm.chat(
-                    system_prompt="你是一个专业的文献综述写作助手。请根据已提供的信息，生成一份结构完整的文献综述。",
-                    user_prompt=forced_prompt,
-                    temperature=0.3,
+                rewritten = self._compose_review(
+                    final_state["topic"],
+                    final_state["steps"],
+                    extra_papers=mem.papers,
                 )
-                if forced_answer and forced_answer.strip():
-                    final_answer = forced_answer.strip()
-                    logger.info("强制汇总成功 | 长度=%d", len(final_answer))
-                else:
-                    raise ValueError("LLM 返回为空")
+                if rewritten:
+                    final_answer = rewritten
+                    logger.info("成稿完成 | 长度=%d", len(final_answer))
             except Exception as e:
-                logger.error("强制汇总失败 | error=%s", str(e))
-                final_answer = (
-                    f"（达到最大步数 {self.max_steps}，未能生成完整综述。以下为搜索摘要）\n\n"
-                    f"研究主题：{final_state['topic']}\n"
-                    f"已执行步骤数：{len(final_state['steps'])}\n\n"
-                    + (scratchpad[:2000] if scratchpad else "无搜索结果")
-                )
+                logger.error("成稿失败 | error=%s", str(e))
+                if not final_answer:
+                    scratchpad = self._build_scratchpad(final_state["steps"])
+                    final_answer = (
+                        f"（未能生成完整综述。）\n\n研究主题：{final_state['topic']}\n"
+                        + (scratchpad[:2000] if scratchpad else "无工具观察")
+                    )
+        elif not final_answer:
+            scratchpad = self._build_scratchpad(final_state["steps"])
+            final_answer = (
+                f"（未能生成完整综述。）\n\n研究主题：{final_state['topic']}\n"
+                + (scratchpad[:2000] if scratchpad else "无工具观察")
+            )
         
         return AgentResult(
             final_answer=final_answer,
             steps=final_state["steps"],
         )
 
-    def _build_scratchpad(self, steps: list[AgentStep]) -> str:
-        """把历史步骤整理成文本，放回下一轮 Prompt 里作为上下文。"""
-        lines: list[str] = []
-        for index, step in enumerate(steps, start=1):
-            lines.append(f"Step {index}")
-            lines.append(f"Thought: {step.thought}")
-            if step.action:
-                lines.append(f"Action: {step.action}")
-                lines.append(
-                    f"Action Input: {json.dumps(step.action_input, ensure_ascii=False)}"
-                )
+    # ── 滑动窗口 + 全局摘要 ─────────────────────────────────
+    # scratchpad 结构:「全局摘要 + 最近 WINDOW_SIZE 步」
+    # 旧步骤滑出窗口后批量压缩为一段摘要,LLM 始终能感知全部搜索成果;
+    # 最近 N 步完整保留,保证推理时有完整的近期上下文。
+    _MAX_OBSERVATION_CHARS = 4000   # 近期步骤 observation 安全截断
+    _WINDOW_SIZE = 6                # 完整保留的最近步数
+
+    # scratchpad 字符上限由模型上下文窗口动态计算(1 token ≈ 2 字符,预留 30% 给 system prompt + 输出)
+    @property
+    def _MAX_SCRATCHPAD_CHARS(self) -> int:
+        """根据当前 LLM 的上下文窗口动态计算 scratchpad 字符上限。"""
+        max_tokens = self.llm.max_context_tokens  # 例: gpt-4o → 128000
+        # 70% 分配给输入上下文, 1 token ≈ 2 中文字符 / 4 英文字符, 取 2.5 作为中英混合保守估计
+        reserved_chars = int(max_tokens * 2.5 * 0.7)
+        return reserved_chars
+
+    @staticmethod
+    def _summarize_steps(steps: list[AgentStep]) -> str:
+        """将滑出窗口的一批历史步骤批量压缩为一段全局摘要。
+
+        摘要包含:
+        - 统计信息:总步数、搜索次数、使用过的工具
+        - 论文发现:从 observation JSON 中提取的论文标题列表
+        - 关键思路:最后 3 步的 thought
+        """
+        if not steps:
+            return ""
+
+        tools_used: list[str] = []
+        seen_tools: set[str] = set()
+        search_count = 0
+        paper_titles: list[str] = []
+        paper_ids: set[str] = set()
+
+        for step in steps:
+            # 工具统计
+            if step.action and step.action not in seen_tools:
+                tools_used.append(step.action)
+                seen_tools.add(step.action)
+            if step.action and "search" in (step.action or "").lower():
+                search_count += 1
+
+            # 从 observation JSON 中提取论文标题
             if step.observation:
-                lines.append(f"Observation: {step.observation}")
+                try:
+                    data = json.loads(step.observation)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                papers = (
+                    data.get("papers")
+                    or data.get("results")
+                    or data.get("documents")
+                    or []
+                )
+                if isinstance(papers, list):
+                    for p in papers[:10]:
+                        title = p.get("title") or ""
+                        pid = p.get("arxiv_id") or p.get("paper_id") or title
+                        if pid and pid not in paper_ids:
+                            paper_ids.add(pid)
+                            if title:
+                                paper_titles.append(title)
+
+        # 组装摘要文本
+        parts: list[str] = []
+        parts.append(
+            f"已执行 {len(steps)} 步 | 工具: {', '.join(tools_used) if tools_used else '无'}"
+        )
+        if search_count:
+            parts.append(f"搜索 {search_count} 次")
+
+        if paper_titles:
+            titles_display = "; ".join(paper_titles[:12])
+            suffix = f" 等共{len(paper_titles)}篇" if len(paper_titles) > 12 else ""
+            parts.append(f"已发现论文: {titles_display}{suffix}")
+
+        # 保留最后 3 步的思考链
+        key_thoughts = [s.thought for s in steps if s.thought][-3:]
+        if key_thoughts:
+            parts.append("关键思路: " + " → ".join(key_thoughts))
+
+        return "\n".join(parts)
+
+    def _build_scratchpad(self, steps: list[AgentStep]) -> str:
+        """构建 scratchpad:「全局摘要 + 最近 WINDOW_SIZE 步完整内容」。
+
+        - 窗口内(最近 N 步):完整保留 thought / action / observation
+          observation 超过 _MAX_OBSERVATION_CHARS 时安全截断(兜底)
+        - 窗口外(更早的步骤):批量压缩为一段全局摘要
+        - 总量超过 _MAX_SCRATCHPAD_CHARS 时丢弃摘要中的论文列表(最终兜底)
+        """
+        if not steps:
+            return ""
+
+        lines: list[str] = []
+
+        # ── 1. 旧步骤 → 全局摘要 ──
+        window = self._WINDOW_SIZE
+        if len(steps) > window:
+            old_steps = steps[:-window]
+            summary = self._summarize_steps(old_steps)
+            if summary:
+                summary_block = (
+                    f"[全局摘要 — 已压缩前 {len(old_steps)} 步]\n{summary}"
+                )
+                lines.append(summary_block)
+        else:
+            summary_block = ""
+
+        # ── 2. 最近 N 步完整保留 ──
+        recent_steps = steps[-window:]
+        total_chars = len("\n".join(lines)) + 1 if lines else 0
+
+        for i, step in enumerate(recent_steps):
+            obs = step.observation or ""
+            if step.action:
+                obs = self._compact_observation_for_prompt(step.action, obs)
+            if len(obs) > self._MAX_OBSERVATION_CHARS:
+                obs = (
+                    obs[: self._MAX_OBSERVATION_CHARS]
+                    + f"\n... [已截断,原始 {len(step.observation or '')} 字符]"
+                )
+
+            # 计算实际步骤编号(从 1 开始连续编号)
+            step_num = len(steps) - len(recent_steps) + i + 1
+            step_text = f"Step {step_num}"
+            if step.thought:
+                step_text += f"\nThought: {step.thought}"
+            if step.action:
+                step_text += f"\nAction: {step.action}"
+                step_text += (
+                    f"\nAction Input: {json.dumps(step.action_input, ensure_ascii=False)}"
+                )
+            if obs:
+                step_text += f"\nObservation: {obs}"
+
+            step_chars = len(step_text) + 1
+
+            # 总量兜底:摘要+近期步骤超限时截断摘要
+            if total_chars + step_chars > self._MAX_SCRATCHPAD_CHARS:
+                # 尝试从摘要中截断论文列表,保留统计信息
+                if summary_block and lines:
+                    summary_short = summary_block.split("\n")[0] + "\n..." 
+                    lines[0] = summary_short
+                    total_chars = len("\n".join(lines)) + 1
+                    if total_chars + step_chars > self._MAX_SCRATCHPAD_CHARS:
+                        break  # 已到极限,停止追加
+                else:
+                    break
+
+            lines.append(step_text)
+            total_chars += step_chars
+
         return "\n".join(lines)
 
     def _parse_decision(self, raw_response: str) -> dict[str, Any]:
@@ -680,10 +941,21 @@ class LangGraphAgent:
             cleaned = cleaned.strip("`")
             cleaned = cleaned.removeprefix("json").strip()
 
-        # 策略1：尝试标准 JSON 解析
+        # 模型偶尔在 JSON 前加对话口吻：从第一个 { 起解析
+        brace = cleaned.find("{")
+        if brace < 0:
+            raise ValueError(f"LLM returned no JSON object: {raw_response[:200]}")
+        if brace > 0:
+            cleaned = cleaned[brace:]
+
+        # 策略1：从第一个 { 解析一个对象；尾部闲聊忽略
         try:
             from json import JSONDecoder
-            return JSONDecoder(strict=False).decode(cleaned)
+            obj, _end = JSONDecoder(strict=False).raw_decode(cleaned)
+            if isinstance(obj, dict):
+                obj.pop("observation", None)
+                if "final_answer" in obj or "action" in obj:
+                    return obj
         except json.JSONDecodeError:
             pass
 

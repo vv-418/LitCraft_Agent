@@ -13,6 +13,40 @@ LLM_MODEL_ID=你的模型名
 LLM_API_KEY=你的 API Key
 LLM_BASE_URL=你的 OpenAI-compatible 接口地址
 LLM_TIMEOUT=60
+
+# 文本检索：dense（默认）| hybrid
+RETRIEVAL_MODE=dense
+
+# 真·多模态（CLIP 图文同空间）。模型缺失时自动跳过，不影响文本 RAG
+MULTIMODAL_ENABLED=1
+MULTIMODAL_MODEL=./models/clip-ViT-B-32
+MULTIMODAL_ALLOW_DOWNLOAD=0
+MULTIMODAL_MAX_IMAGES=24
+```
+
+可选：首次有网时下载模型到本地（之后可离线）。
+
+**文本多语 embedding（必选，P2）：**
+
+```bash
+# ModelScope（国内更稳）
+modelscope download --model BAAI/bge-m3 --local_dir ./models/bge-m3
+```
+
+**CLIP 插图（可选多模态）：** 优先 sentence-transformers 布局；也可放 HuggingFace OpenAI CLIP（`config.json` 含 `model_type=clip`），加载器会自动识别：
+
+```bash
+# Hugging Face（或镜像）
+huggingface-cli download sentence-transformers/clip-ViT-B-32 --local-dir ./models/clip-ViT-B-32
+
+# 国内可用 ModelScope
+# modelscope download --model openai-mirror/clip-vit-base-patch32 --local_dir ./models/clip-ViT-B-32
+```
+
+旧版 MiniLM / bge-zh **双集合索引与 bge-m3 不兼容**，换模型后请重建：
+
+```bash
+python benchmark/seed_chroma.py "output/2026-09-07/高速公路天气图像识别/lit_source" --rebuild
 ```
 
 ### 2. 安装依赖
@@ -37,17 +71,25 @@ python main.py --topic "RAG 在医学问答中的应用" --save-pdf output/revie
 d:\Users\vv\Anaconda3\envs\litcraft\python.exe
 ```
 
-### Web API 方式（需额外启动后端）
+### Web 方式（FastAPI + Vue）
 
 ```bash
 # 终端1：启动 FastAPI 后端（端口 8000）
 python -m uvicorn api.server:app --reload --port 8000
 
-# 终端2：启动 Streamlit 前端（端口 8501）
-python -m streamlit run frontend/app.py --server.port 8501
+# 终端2：启动 Vue 前端（端口 5173）
+cd frontend
+npm install
+npm run dev
 ```
 
-然后浏览器打开 http://localhost:8501 即可使用图形界面。
+然后浏览器打开 http://localhost:5173 即可使用图形界面。
+
+可选：旧版 Streamlit 前端仍保留在 `frontend_streamlit/`：
+
+```bash
+python -m streamlit run frontend_streamlit/app.py --server.port 8501
+```
 
 ## 目录结构
 
@@ -70,11 +112,12 @@ LitCraft_Agent/
 │   ├── base.py                # Tool / ToolSpec 基类
 │   ├── registry.py            # 工具注册表
 │   ├── paper_downloader.py    # PDF 下载
-│   ├── pdf_parser.py          # PDF 文本解析
-│   ├── pdf_generator.py       # 综述 PDF 生成
+│   ├── pdf_parser.py          # PDF：pdfplumber 文本/表 + PyMuPDF 抽图
+│   ├── multimodal_embedder.py # CLIP 图文同空间编码（可选）
 │   ├── text_chunker.py        # 长文本分块
-│   ├── vector_store.py        # Chroma 向量存储
-│   ├── advanced_retrieval.py  # HyDE + MQE 智能检索
+│   ├── vector_store.py        # Chroma：多语 bge-m3 文本集合 + *_mm 插图
+│   ├── advanced_retrieval.py  # Dense 基线；可选 hybrid；文本+图像加权 RRF
+│   ├── reranker.py            # bge-reranker-v2-m3 本地重排
 │   │
 │   └── search/
 │       ├── __init__.py
@@ -83,7 +126,7 @@ LitCraft_Agent/
 │       ├── semantic_scholar.py      # Semantic Scholar API 搜索
 │       └── multi_source_search.py   # 多源聚合搜索
 │
-├── output/                   # 输出目录（生成的 PDF、中间文件）
+├── output/                   # 输出：{日期}/{主题}/lit_source、figures、papers
 ├── storage/
 │   └── chroma/               # Chroma 向量数据库持久化目录
 │
@@ -93,14 +136,15 @@ LitCraft_Agent/
 │   ├── task_manager.py       # 后台任务管理器
 │   └── server.py             # FastAPI 路由入口
 │
-├── frontend/
-│   └── app.py                # Streamlit 前端页面
+├── frontend/                 # Vue 3 + Vite 前端（主界面）
+│   ├── package.json
+│   ├── vite.config.js
+│   └── src/
 │
-├── output/                   # 输出目录（生成的 PDF、中间文件）
-├── storage/
-│   └── chroma/               # Chroma 向量数据库持久化目录
+├── frontend_streamlit/
+│   └── app.py                # 旧版 Streamlit 前端（备份）
 │
-└── models/                   # 本地 NLP 模型缓存（用于 sentence-transformers）
+└── models/                   # 本地模型（bge-m3 / CLIP / reranker）
 ```
 
 ## 脚本说明
@@ -453,8 +497,9 @@ class MultiSourceSearchTool
 ```
 
 - `run(tool_input)` — 一个调用同时搜索 arXiv + Semantic Scholar + Google Scholar
+- **查询策略（对齐网站搜索框）**：中文主题 = 原句 + 合格英译（两路）；英文主题 = 仅原句；默认不做关键词核扩写
+- 去重后合并；默认关闭本地主题 embedding 过滤（`SEARCH_TOPIC_FILTER=1` 可恢复）；排序保留多源命中与出现序
 - 即使部分来源失败，仍返回其他成功来源的结果
-- 去重后合并返回
 
 ### tools/paper_downloader.py
 
@@ -464,18 +509,27 @@ class MultiSourceSearchTool
 class PaperDownloaderTool
 ```
 
-- `run(tool_input)` — 接收论文 URL 和标题，下载 PDF 到 `output/papers/`
+- `run(tool_input)` — 接收论文 URL 和标题，下载 PDF 到当前任务的 `output/{日期}/{主题}/lit_source/`
 - 支持 arXiv 和 Semantic Scholar PDF 链接
 
 ### tools/pdf_parser.py
 
-解析 PDF 文件提取文本。
+解析 PDF：文本/表格用 **pdfplumber**，插图用 **PyMuPDF** 抽到当前任务的 `output/{日期}/{主题}/figures/<pdf_stem>/`（与 `lit_source` 同级）。
 
 ```python
 class PDFParserTool
 ```
 
-- `run(tool_input)` — 读取 PDF 路径，解析出纯文本内容
+- `run(tool_input)` — 返回 `content.full_text`、`tables`、`images`（schema：`image_id, path, page, width, height`）
+- 默认 `extract_images=true`；过滤过小/超大图；单 PDF 最多约 24 张
+- 插图落盘：`output/{日期}/{主题}/figures/<pdf_stem>/`（与 PDF 目录 `lit_source` 同级）
+
+### tools/multimodal_embedder.py
+
+真·多模态：本地 CLIP（`./models/clip-ViT-B-32`）将文本与图像编码到同一向量空间。
+
+- `MULTIMODAL_ENABLED=0` 或模型目录缺失时 `available=False`，只 warn，不打断主流程
+- 默认 `MULTIMODAL_ALLOW_DOWNLOAD=0`（离线）；需自行下载模型
 
 ### tools/pdf_generator.py
 
@@ -505,19 +559,24 @@ class TextChunkerTool
 class VectorStoreTool
 ```
 
-- `run(tool_input)` — 将文本块及其元数据批量存入 Chroma
-- 使用 `all-MiniLM-L6-v2` 模型生成嵌入向量
+- 文本：单一多语模型 **bge-m3** 写入主题集合 `{topic}`（中英同一向量空间，无需 `_en/_zh`）
+- 插图：`add_images` → `{topic}_mm`（CLIP；与文本维度无关）
+- 检索：同一模型编码 query；`search_images` 用 CLIP 文本向量查 `_mm`
+- `delete` 删除主集合、`_mm`，并清理历史 `_en/_zh`
+- **迁移**：旧双语索引与 bge-m3 维度不兼容，需对已下载 PDF 重建，例如 `python benchmark/seed_chroma.py "output/2026-09-07/高速公路天气图像识别/lit_source" --rebuild`
 
 ### tools/advanced_retrieval.py
 
-混合策略的智能检索工具。
+文献综述场景的向量证据检索。
 
 ```python
-class AdvancedRetrievalTool
+class AdvancedRetrieval
 ```
 
-- `run(tool_input)` — 对查询执行 **HyDE**（假设文档嵌入）+ **MQE**（多查询扩展）双策略检索
-- 合并两种检索结果，返回最相关的内容块
+- Dense 基线（默认，`RETRIEVAL_MODE=dense`）：文本 Top-K + 可选 CLIP 图像 Top-M，**加权 RRF**（文本权重大于图像）
+- 可选 hybrid：Dense(+BM25)→RRF→`bge-reranker-v2-m3`，同样挂上图像辅路
+- 图像命中带 `modality=image` 与可读 path，供综述引用「见图」
+- 配置：`RERANKER_MODEL`、`RERANK_TOP_N`（仅 hybrid）；`MULTIMODAL_*`（图文）
 
 ### api/server.py
 
@@ -576,19 +635,18 @@ AgentResultResponse
 - `steps` — 完整 ReAct 执行轨迹列表
 - `pdf_path` — PDF 文件保存路径
 
-### frontend/app.py
+### frontend/（Vue 主前端）
 
-作用：Streamlit 前端主页面，为用户提供可视化操作界面。
-
-布局与功能：
+作用：基于 Vue 3 + Vite 的图形界面，通过 REST API 调用 FastAPI 后端。
 
 | 页面 | 功能 |
 |------|------|
-| 📝 新建综述 | 输入研究主题、年份过滤、PDF 选项，提交任务 |
-| 📊 执行状态 | 实时轮询展示每步思考→行动→观察，完成后展示综述正文和 PDF 下载 |
-| 📚 历史记录 | 按创建时间倒序列出所有历史任务，可查看完成结果 |
+| 新建综述 (`/`) | 输入研究主题、年份过滤、PDF 选项；提交后轮询展示执行轨迹与综述正文 |
+| 历史记录 (`/history`) | 按创建时间倒序列出历史任务，可跳转查看结果 |
 
-通过 `requests` 库调用 FastAPI 后端接口，实现前后端分离。
+开发启动：`cd frontend && npm install && npm run dev`（默认 http://localhost:5173）。
+
+旧版 Streamlit 备份见 `frontend_streamlit/app.py`。
 
 ## 主流程调用图
 

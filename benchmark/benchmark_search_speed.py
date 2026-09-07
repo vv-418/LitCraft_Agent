@@ -163,9 +163,8 @@ def main():
     print("=" * 66)
 
     # ── JSON 导出 ────────────────────────────────────────────────
-    output_dir = ROOT / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "benchmark_search_speed.json"
+    from benchmark.paths import result_path
+    output_path = result_path("benchmark_search_speed.json")
 
     json_output = {
         "test_config": {

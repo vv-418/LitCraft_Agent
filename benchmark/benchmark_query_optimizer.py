@@ -223,9 +223,8 @@ def main():
     print()
 
     # ── JSON 导出 ───────────────────────────────────────────
-    output_dir = ROOT / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "benchmark_query_optimizer.json"
+    from benchmark.paths import result_path
+    output_path = result_path("benchmark_query_optimizer.json")
 
     json_output = {
         "test_config": {

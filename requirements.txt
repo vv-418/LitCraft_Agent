@@ -11,11 +11,15 @@ retrying>=1.3.3
 # PDF 处理
 pdfplumber>=0.10.0
 PyPDF2>=3.16.0
+pymupdf>=1.24.0
+Pillow>=10.0.0
 
 # 向量数据库 & 嵌入
 chromadb>=0.3.21
 sentence-transformers>=2.2.0
 numpy<2.0.0
+rank_bm25>=0.2.2
+deep-translator>=1.11.4
 
 # 后端
 fastapi>=0.104.0

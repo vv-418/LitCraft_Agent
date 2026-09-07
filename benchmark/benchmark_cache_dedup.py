@@ -248,9 +248,8 @@ def main():
         print("  ℹ️  语义去重本次未返回额外结果 (可能 MD5 已足够)")
 
     # ── JSON 导出 ──────────────────────────────────────────────
-    output_dir = ROOT / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "benchmark_cache_dedup.json"
+    from benchmark.paths import result_path
+    output_path = result_path("benchmark_cache_dedup.json")
 
     json_output = {
         "test_config": {

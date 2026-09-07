@@ -19,6 +19,38 @@ class AgentStartRequest(BaseModel):
     topic: str = Field(..., description="研究主题，如「Transformer 在自然语言处理中的应用」")
     year_from: str = Field(default="", description="年份过滤条件，只搜索该年份之后的文献（空字符串表示不限制）")
     save_pdf: bool = Field(default=False, description="是否在生成综述后自动保存为 PDF 文件")
+    output_dir: str = Field(
+        default="",
+        description="兼容旧参数：同时作为论文与综述的自定义根目录",
+    )
+    papers_output_dir: str = Field(
+        default="",
+        description="下载论文/插图保存目录。留空则用 output/日期/主题/{lit_source,figures}",
+    )
+    papers_filename: str = Field(
+        default="",
+        description="下载论文文件名前缀。留空则用「标题__网址.pdf」",
+    )
+    review_output_dir: str = Field(
+        default="",
+        description="最终综述 PDF 保存目录。留空则用 output/日期/主题/papers/",
+    )
+    review_filename: str = Field(
+        default="",
+        description="综述 PDF 文件名。留空则用「01主题_综述_时刻.pdf」",
+    )
+    per_source_limit: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="每个学术源（arXiv / Semantic Scholar / Google Scholar）单次最多保留篇数",
+    )
+    final_limit: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="多源合并去重后最终对外保留的论文篇数",
+    )
 
 
 class TaskStatusResponse(BaseModel):
@@ -36,6 +68,10 @@ class StepResponse(BaseModel):
     action: str | None = Field(default=None, description="调用的工具名（空表示这是最终步骤）")
     action_input: dict[str, Any] = Field(default_factory=dict, description="工具输入参数")
     observation: str | None = Field(default=None, description="工具返回的观察结果（已截断）")
+    summary: dict[str, Any] = Field(
+        default_factory=dict,
+        description="面向用户的步骤摘要（标题、命中篇数、论文列表等）",
+    )
 
 
 class AgentResultResponse(BaseModel):
@@ -47,6 +83,9 @@ class AgentResultResponse(BaseModel):
     final_answer: str = Field(default="", description="最终文献综述正文（Markdown 格式）")
     steps: list[StepResponse] = Field(default_factory=list, description="完整 ReAct 执行轨迹")
     pdf_path: str | None = Field(default=None, description="PDF 文件路径（仅 save_pdf=True 时存在）")
+    output_folder: str | None = Field(default=None, description="本次任务根目录（日期/主题或自选论文目录）")
+    papers_folder: str | None = Field(default=None, description="下载论文保存目录（lit_source）")
+    review_folder: str | None = Field(default=None, description="综述 PDF 保存目录")
     error: str | None = Field(default=None, description="错误信息（仅 status=error 时存在）")
     traceback: str | None = Field(default=None, description="完整错误堆栈（仅 status=error 时存在）")
     created_at: str = Field(default="", description="任务创建时间")
@@ -59,3 +98,18 @@ class TaskListItem(BaseModel):
     topic: str = Field(..., description="研究主题")
     status: str = Field(..., description="任务状态")
     created_at: str = Field(..., description="任务创建时间")
+
+
+class PickSavePathRequest(BaseModel):
+    """弹出系统「另存为」对话框时的参数。"""
+
+    kind: str = Field(default="review", description="papers=下载论文；review=综述 PDF")
+    topic: str = Field(default="", description="用于预填综述默认文件名")
+    initial_file: str = Field(default="", description="对话框里预填的文件名")
+
+
+class AgentSavePdfRequest(BaseModel):
+    """任务完成后，由用户手动保存综述 PDF。"""
+
+    review_output_dir: str = Field(..., min_length=1, description="保存文件夹")
+    review_filename: str = Field(default="", description="文件名，留空则用默认 01主题_综述_时刻")

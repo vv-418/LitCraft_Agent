@@ -16,7 +16,15 @@ from utils.logger import get_logger
 from agent.langgraph_agent import LangGraphAgent
 from llm_client import LitCraftAgentsLLM
 from tools.registry import ToolRegistry
-from tools.search import ArxivSearchTool, SemanticScholarTool, GoogleScholarTool, MultiSourceSearchTool
+from tools.search import (
+    ArxivSearchTool,
+    SemanticScholarTool,
+    GoogleScholarTool,
+    OpenAlexTool,
+    CrossrefTool,
+    EuropePMCTool,
+    MultiSourceSearchTool,
+)
 from tools.paper_downloader import PaperDownloaderTool
 from tools.pdf_parser import PDFParserTool
 from tools.text_chunker import TextChunkerTool
@@ -27,45 +35,44 @@ logger = get_logger("main")
 
 
 # 作用：创建大模型客户端、工具注册表，并组装成一个可以运行的 LangGraphAgent。
-def build_agent() -> LangGraphAgent:
+def build_agent(papers_dir: str = "", figures_dir: str = "") -> LangGraphAgent:
     """创建 LLM、注册工具，并组装成一个 LangGraphAgent。"""
     llm = LitCraftAgentsLLM()
 
     tools = ToolRegistry()
     
-    # 第0步：多源搜索（arXiv + Semantic Scholar + Google Scholar）
-    tools.register(MultiSourceSearchTool(max_results=10), aliases=["search", "search_papers"])
+    tools.register(MultiSourceSearchTool(
+        max_results=10,
+        papers_dir=papers_dir,
+        figures_dir=figures_dir,
+    ))
+    tools.register(ArxivSearchTool(max_results=5, initial_delay=5.0, max_retries=5))
+    tools.register(SemanticScholarTool(max_results=5))
+    tools.register(GoogleScholarTool(max_results=5))
+    tools.register(OpenAlexTool(max_results=5))
+    tools.register(CrossrefTool(max_results=5))
+    tools.register(EuropePMCTool(max_results=5))
     
-    # 第1步：搜索论文（arXiv）
-    tools.register(ArxivSearchTool(max_results=5, initial_delay=5.0, max_retries=5), aliases=["search_arxiv"])
-    
-    # 第1b步：Semantic Scholar（补充）
-    tools.register(SemanticScholarTool(max_results=5), aliases=["search_semantic_scholar"])
-    
-    # 第1c步：Google Scholar（备选）
-    tools.register(GoogleScholarTool(max_results=5), aliases=["search_google_scholar"])
-    
-    # 第2步：下载论文（PDF）
-    tools.register(PaperDownloaderTool(storage_path="./storage/papers", max_retries=3, timeout=30),
-                   aliases=["download_pdf", "download_paper", "download_papers", "download", "fetch_paper"])
+    # 第2步：下载论文（PDF）——直接写入任务 lit_source
+    tools.register(PaperDownloaderTool(storage_path=papers_dir, max_retries=3, timeout=30))
     
     # 第3步：解析论文（提取文本）
-    tools.register(PDFParserTool(storage_path="./storage/papers"), aliases=["parse_pdf", "pdf_extract"])
+    tools.register(PDFParserTool(storage_path=papers_dir, figures_path=figures_dir))
     
     # 第4步：分块文本（用于向量化）
-    tools.register(TextChunkerTool(chunk_size=512, chunk_overlap=128), aliases=["chunk_text", "split_text"])
+    tools.register(TextChunkerTool(chunk_size=512, chunk_overlap=128))
     
     # 第5步：存储向量（构建向量数据库）
     vector_store = VectorStoreTool(db_path="./storage/chroma", local_model_cache="./models")
-    tools.register(vector_store, aliases=["vector_search", "store_vector", "chroma_search"])
+    tools.register(vector_store)
     
-    # 第6步：高级检索（HyDE + MQE 混合检索）
+    # 第6步：证据检索（默认 Dense 基线；.env 设 RETRIEVAL_MODE=hybrid 可开重排）
     tools.register(AdvancedRetrieval(
         vector_store=vector_store,
         llm=llm,
         num_hypotheses=3,
         num_query_variants=3
-    ), aliases=["hybrid_search", "retrieve", "advanced_search", "rag_search"])
+    ))
 
     # 创建 Agent：充足的步骤数支持完整工作流（搜索→下载→解析→分块→存储→检索→综述）
     # 包括双语搜索、多篇论文下载解析等，需要足够步数
@@ -83,7 +90,7 @@ def main() -> None:
     parser.add_argument("--year-from", type=str, default="",
                         help="年份过滤条件，只搜索该年份之后的文献（如 2020）")
     parser.add_argument("--save-pdf", type=str, default="",
-                        help="将最终答案保存为 PDF 文件的路径（如 output/review.pdf）")
+        help="将最终综述保存为 PDF；可传目录或任意 .pdf 路径（默认保存到 output/日期/主题/papers/）")
     args = parser.parse_args()
 
     print("\n" + "="*80)
@@ -93,16 +100,23 @@ def main() -> None:
     logger.info("Agent 启动 | topic=%s | year_from=%s | save_pdf=%s",
                 args.topic, args.year_from, args.save_pdf)
     print("\n[WORKFLOW] 完整工作流：")
-    print("  [0] 多源搜索（arxiv_search + semantic_scholar + google_scholar）")
+    print("  [0] 多源搜索（OpenAlex + Crossref + Europe PMC + arXiv + Semantic Scholar）")
     print("  [1] 下载 PDF（paper_downloader）")
     print("  [2] 解析内容（pdf_parser）")
     print("  [3] 文本分块（text_chunker）")
     print("  [4] 向量存储（vector_store）")
-    print("  [5] 智能检索（advanced_search with HyDE+MQE）")
+    print("  [5] 智能检索（向量库: Dense+BM25+RRF+MMR）")
     print("  [6] 生成综述（final_answer）")
     print("\n" + "="*80 + "\n")
 
-    agent = build_agent()
+    from datetime import datetime
+    from utils.review_output import resolve_papers_layout, save_run_outputs
+
+    started = datetime.now()
+    _, lit_source, figures = resolve_papers_layout(args.topic, when=started)
+    print(f"[SAVE] 论文直接下载到: {lit_source}")
+
+    agent = build_agent(papers_dir=str(lit_source), figures_dir=str(figures))
     logger.info("Agent 构建完成，开始执行")
 
     try:
@@ -115,16 +129,48 @@ def main() -> None:
         logger.error("Agent 执行失败 | error=%s\\n%s", str(e), tb)
         print(f"\n[ERROR] Agent 执行失败: {e}")
         sys.exit(1)
-    
-    # 如果指定了 --save-pdf，将最终答案保存为 PDF
+
+    from pathlib import Path
+    from tools.pdf_generator import PDFGeneratorTool
+    from utils.review_output import default_output_root
+
+    write_review = None
+    review_dir = ""
+    review_name = ""
     if args.save_pdf:
-        from tools.pdf_generator import PDFGeneratorTool
         pdf_gen = PDFGeneratorTool()
-        pdf_result = pdf_gen.run({"text": result.final_answer, "output_path": args.save_pdf})
-        if pdf_result.startswith("ERROR"):
-            print(f"\n[ERROR] PDF 保存失败: {pdf_result}")
+        save_arg = Path(args.save_pdf)
+        if save_arg.suffix.lower() == ".pdf":
+            parent = save_arg.parent
+            if str(parent) not in (".", ""):
+                review_dir = str(parent.expanduser().resolve())
+            review_name = save_arg.name
         else:
-            print(f"\n[PDF] 最终答案已保存至: {args.save_pdf}")
+            resolved = save_arg.expanduser().resolve()
+            if resolved != default_output_root():
+                review_dir = str(resolved)
+
+        def _write_review(output_path: str) -> str:
+            return pdf_gen.run({"text": result.final_answer, "output_path": output_path})
+
+        write_review = _write_review
+
+    saved = save_run_outputs(
+        topic=args.topic,
+        steps=result.steps,
+        final_answer=result.final_answer or "",
+        save_pdf=bool(args.save_pdf),
+        review_output_dir=review_dir,
+        review_filename=review_name,
+        when=started,
+        write_review_pdf=write_review,
+    )
+    print(f"\n[SAVE] 论文目录: {saved.get('papers_folder')}")
+    pdf_path = saved.get("pdf_path")
+    if args.save_pdf and not pdf_path:
+        print("\n[ERROR] PDF 保存失败")
+    elif pdf_path:
+        print(f"[PDF] 综述已保存至: {pdf_path}")
 
     print("\n" + "="*80)
     print("[STEPS] 执行步骤详情")
