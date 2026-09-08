@@ -14,13 +14,23 @@ from agent.memory import ResearchMemory
 from agent.models import AgentResult, AgentStep
 from agent.prompts import (
     JSON_REPAIR_PROMPT,
+    REACT_SYSTEM,
+    REACT_SYSTEM_NATIVE,
     REVIEW_MIN_CHARS,
-    REVIEW_WRITING_SPEC,
-    SYSTEM_PROMPT,
-    build_user_prompt,
+    REVIEW_SECTIONS,
+    WRITER_SECTION_SYSTEM,
+    WRITER_SYSTEM,
+    build_react_user,
+    build_section_writer_user,
+    build_writer_user,
+    format_references,
     review_meets_standard,
+    section_heading_md,
+    section_number,
+    section_search_query,
 )
-from llm_client import LitCraftAgentsLLM
+from utils.review_format import ensure_section_heading, polish_review_markdown, strip_inline_bibliographies
+from llm_client import LLMTurn, LitCraftAgentsLLM
 from tools.registry import ToolRegistry
 from utils.logger import get_logger
 
@@ -130,7 +140,8 @@ class LangGraphAgent:
         print(f"{'='*60}", flush=True, file=sys.stderr)
 
         mem = ResearchMemory(state.get("memory"))
-        user_prompt = build_user_prompt(
+        native_ok = not getattr(self.llm, "_tools_unsupported", False)
+        user_prompt = build_react_user(
             topic=state["topic"],
             tools=self.tools,
             scratchpad=self._build_scratchpad(state["steps"]),
@@ -141,16 +152,10 @@ class LangGraphAgent:
                 per_source_limit=int(state.get("per_source_limit") or 10),
                 final_limit=int(state.get("final_limit") or 10),
             ),
+            native_tools=native_ok,
         )
         try:
-            raw_response = self.llm.chat(
-                system_prompt=SYSTEM_PROMPT,
-                user_prompt=user_prompt,
-                temperature=self.temperature,
-                max_tokens=1024,
-                json_mode=True,
-                stop=["下一步指示", "请告知您下一步"],
-            )
+            decision = self._decide(user_prompt, native_ok=native_ok)
         except Exception as e:
             logger.error("LLM 调用失败 | error=%s", str(e), exc_info=True)
             # LLM 不可用（如 API 超时/500）时，生成兜底答案继续执行
@@ -162,30 +167,6 @@ class LangGraphAgent:
                 + self._build_fallback_review(state["topic"], state.get("steps", []))
             )
             return state
-
-        try:
-            decision = self._parse_decision(raw_response)
-        except (ValueError, json.JSONDecodeError) as e:
-            logger.warning("决策不是 JSON，进行一次纠错重试 | error=%s | preview=%s", e, (raw_response or "")[:160])
-            print("  [AGENT] ⚠ 未得到 JSON，按协议纠错重试一次…", flush=True, file=sys.stderr)
-            try:
-                repaired = self.llm.chat(
-                    system_prompt=SYSTEM_PROMPT,
-                    user_prompt=JSON_REPAIR_PROMPT + (raw_response or "")[:400],
-                    temperature=0,
-                    max_tokens=1024,
-                    json_mode=True,
-                    stop=["下一步指示", "请告知您下一步"],
-                )
-                decision = self._parse_decision(repaired)
-            except Exception as e2:
-                logger.warning("纠错后仍不是 JSON | error=%s", e2)
-                print("  [AGENT] ⚠ 纠错失败，本步记为无效", flush=True, file=sys.stderr)
-                decision = {
-                    "thought": (raw_response or "")[:200],
-                    "action": "",
-                    "action_input": {},
-                }
 
         thought = str(decision.get("thought", "")).strip()
         state["current_thought"] = thought
@@ -275,10 +256,25 @@ class LangGraphAgent:
                 if corrected != action:
                     logger.info("工具名映射: %s → %s", action, corrected)
                     action = corrected
+            if action.lower() in ("final_answer", "finish"):
+                state["is_final"] = True
+                state["final_answer"] = "检索结束，请按体例成稿"
+                print(f"  [AGENT] ✅ 第 {step_num}/{max_steps} 步 → 结束检索", flush=True, file=sys.stderr)
+                return state
 
-            # 缺省补全：不改写模型已给出的 query / 策略参数
+            # 检索词与篇数以用户设置为准：原生 FC 常会自填短词 query 和错误的 5
             if self._is_search_action(action):
-                if not str(action_input.get("query") or "").strip() and topic_raw:
+                mem_now = ResearchMemory(state.get("memory"))
+                given_q = str(action_input.get("query") or "").strip()
+                first_search = not mem_now.queries
+                if topic_raw and (first_search or not given_q):
+                    if given_q and given_q != topic_raw:
+                        print(
+                            f"  [AGENT] 第一次搜索忽略模型自编 query「{given_q[:40]}」，改用主题",
+                            flush=True,
+                            file=sys.stderr,
+                        )
+                        logger.info("覆盖自编 query: %s → %s", given_q, topic_raw)
                     action_input["query"] = topic_raw
                 user_year = str(state.get("year_from") or "").strip()
                 if user_year.isdigit():
@@ -298,11 +294,11 @@ class LangGraphAgent:
                 per_source = int(state.get("per_source_limit") or 0)
                 final_n = int(state.get("final_limit") or 0)
                 if "multi_source" in (action or "").lower():
-                    if final_n > 0 and "limit" not in action_input:
+                    if final_n > 0:
                         action_input["limit"] = final_n
-                    if per_source > 0 and "per_source_limit" not in action_input:
+                    if per_source > 0:
                         action_input["per_source_limit"] = per_source
-                elif per_source > 0 and "limit" not in action_input:
+                elif per_source > 0:
                     action_input["limit"] = per_source
 
             state["current_action"] = action
@@ -316,6 +312,72 @@ class LangGraphAgent:
             logger.info("步骤 %d | 决策: action=%s | thought=%.80s",
                         state["step_count"], action, thought)
         return state
+
+    def _decision_from_native(self, turn: LLMTurn) -> dict[str, Any]:
+        name = (turn.tool_name or "").strip()
+        args = turn.tool_args if isinstance(turn.tool_args, dict) else {}
+        thought = (turn.content or "").strip() or str(args.get("reason") or args.get("thought") or "")
+        if name.lower() in ("final_answer", "finish", "end"):
+            return {
+                "thought": thought or str(args.get("reason") or "检索结束"),
+                "final_answer": "检索结束，请按体例成稿",
+            }
+        return {"thought": thought, "action": name, "action_input": args}
+
+    def _parse_or_repair(self, raw_response: str) -> dict[str, Any]:
+        try:
+            return self._parse_decision(raw_response)
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.warning("决策不是 JSON，进行一次纠错重试 | error=%s | preview=%s", e, (raw_response or "")[:160])
+            print("  [AGENT] ⚠ 未得到 JSON，按协议纠错重试一次…", flush=True, file=sys.stderr)
+            try:
+                repaired = self.llm.chat(
+                    system_prompt=REACT_SYSTEM,
+                    user_prompt=JSON_REPAIR_PROMPT + (raw_response or "")[:400],
+                    temperature=0,
+                    max_tokens=1024,
+                    json_mode=True,
+                    stop=["下一步指示", "请告知您下一步"],
+                )
+                return self._parse_decision(repaired)
+            except Exception as e2:
+                logger.warning("纠错后仍不是 JSON | error=%s", e2)
+                print("  [AGENT] ⚠ 纠错失败，本步记为无效", flush=True, file=sys.stderr)
+                return {
+                    "thought": (raw_response or "")[:200],
+                    "action": "",
+                    "action_input": {},
+                }
+
+    def _decide(self, user_prompt: str, native_ok: bool) -> dict[str, Any]:
+        """原生 function calling 优先；接口不支持或未给出 tool_call 时走 JSON。"""
+        if native_ok:
+            turn = self.llm.chat_turn(
+                system_prompt=REACT_SYSTEM_NATIVE,
+                user_prompt=user_prompt,
+                temperature=self.temperature,
+                max_tokens=1024,
+                tools=self.tools.openai_tools(),
+                stop=["下一步指示", "请告知您下一步"],
+            )
+            if turn.tool_name:
+                print(
+                    f"  [AGENT] 原生 tool_call → {turn.tool_name}",
+                    flush=True,
+                    file=sys.stderr,
+                )
+                return self._decision_from_native(turn)
+            if turn.content:
+                return self._parse_or_repair(turn.content)
+        raw = self.llm.chat(
+            system_prompt=REACT_SYSTEM,
+            user_prompt=user_prompt,
+            temperature=self.temperature,
+            max_tokens=1024,
+            json_mode=True,
+            stop=["下一步指示", "请告知您下一步"],
+        )
+        return self._parse_or_repair(raw)
 
     def _tool_node(self, state: AgentState) -> AgentState:
         """工具节点：执行选定的工具。"""
@@ -612,13 +674,118 @@ class LangGraphAgent:
                 papers.append(item)
         return papers
 
+    def _collection_candidates(self, topic: str, mem: ResearchMemory) -> list[str]:
+        names: list[str] = []
+        for raw in list(mem.collections) + list(mem.queries) + [topic]:
+            name = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff_\-]", "_", (raw or "").strip())[:50]
+            if name and name not in names:
+                names.append(name)
+        return names
+
+    def _retrieve_compose_passages(
+        self,
+        topic: str,
+        papers: list[dict[str, Any]],
+        mem: ResearchMemory,
+        top_k: int = 10,
+        query: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """成稿前从 Chroma 取原文块；失败则返回空，Writer 退回摘要。"""
+        search_query = (query or topic or "").strip() or topic
+        if not papers:
+            return []
+        whitelist = {
+            str(p.get("title") or p.get("paper_title") or "").strip().lower()
+            for p in papers
+            if str(p.get("title") or p.get("paper_title") or "").strip()
+        }
+        title_to_cite = {}
+        for i, paper in enumerate(papers, 1):
+            title = str(paper.get("title") or paper.get("paper_title") or "").strip()
+            if title:
+                title_to_cite[title.lower()] = str(i)
+
+        raw_chunks: list[dict[str, Any]] = []
+        for cname in self._collection_candidates(topic, mem):
+            try:
+                obs = self.tools.run("advanced_search", {
+                    "collection_name": cname,
+                    "query": search_query,
+                    "top_k": top_k,
+                    "threshold": 0.0,
+                })
+            except Exception as e:
+                logger.warning("成稿检索失败 | collection=%s | error=%s", cname, e)
+                continue
+            try:
+                data = json.loads(obs) if isinstance(obs, str) else obs
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(data, dict) or data.get("status") == "error":
+                continue
+            chunks = data.get("chunks") or []
+            if isinstance(chunks, list) and chunks:
+                raw_chunks = [c for c in chunks if isinstance(c, dict)]
+                print(
+                    f"  [AGENT] 成稿检索 '{search_query[:40]}' @ '{cname}' → {len(raw_chunks)} 个片段",
+                    flush=True,
+                    file=sys.stderr,
+                )
+                break
+
+        passages: list[dict[str, Any]] = []
+        seen_text: set[str] = set()
+        for chunk in raw_chunks:
+            if str(chunk.get("modality") or "text") == "image":
+                continue
+            meta = chunk.get("metadata") or {}
+            if not isinstance(meta, dict):
+                meta = {}
+            title = str(
+                meta.get("title")
+                or meta.get("custom_title")
+                or chunk.get("source")
+                or meta.get("source")
+                or ""
+            ).strip()
+            content = str(chunk.get("content") or "").strip()
+            if not content:
+                continue
+            key = content[:160]
+            if key in seen_text:
+                continue
+            if whitelist and title and title.lower() not in whitelist:
+                hit = next((t for t in whitelist if t[:20] and t[:20] in title.lower()), "")
+                if not hit:
+                    continue
+                matched = next(
+                    (
+                        str(p.get("title") or "").strip()
+                        for p in papers
+                        if str(p.get("title") or "").strip().lower() == hit
+                    ),
+                    "",
+                )
+                if matched:
+                    title = matched
+            seen_text.add(key)
+            passages.append({
+                "title": title or str(meta.get("source") or ""),
+                "content": content,
+                "cite": title_to_cite.get(title.lower(), ""),
+            })
+            if len(passages) >= top_k:
+                break
+        return passages
+
     def _compose_review(
         self,
         topic: str,
         steps: list[AgentStep],
         extra_papers: list[dict[str, Any]] | None = None,
+        memory: ResearchMemory | None = None,
     ) -> str:
-        """根据研究记忆与轨迹写一篇符合体例的综述（Markdown，不走 JSON）。"""
+        """按节 retrieve-and-write。单节没搜到或写失败不影响其他节；不因过短整篇作废。"""
         papers = self._collect_papers_from_steps(steps)
         seen = {
             str(p.get("title") or p.get("paper_title") or "").strip().lower()
@@ -629,44 +796,73 @@ class LangGraphAgent:
             if title and title.lower() not in seen:
                 seen.add(title.lower())
                 papers.append(paper)
-        lines = [f"研究主题：{topic}", "", "本次检索到的文献（只能引用这些，禁止编造）："]
-        if not papers:
-            lines.append("（没有题录。请明确写未检索到可用文献，不要编造。）")
-        else:
-            for i, paper in enumerate(papers, 1):
-                title = paper.get("title") or paper.get("paper_title") or ""
-                year = paper.get("year") or ""
-                authors = paper.get("authors") or ""
-                if isinstance(authors, list):
-                    authors = ", ".join(str(a) for a in authors[:8])
-                venue = paper.get("venue") or paper.get("journal") or ""
-                abstract = str(paper.get("abstract") or paper.get("snippet") or paper.get("text") or "")[:800]
-                url = paper.get("url") or paper.get("pdf_url") or ""
-                lines.append(
-                    f"[{i}] {title} ({year}) | {authors} | {venue}\n"
-                    f"    链接: {url}\n"
-                    f"    摘要/片段: {abstract or '（观察中无摘要）'}"
+        mem = memory or ResearchMemory()
+        parts: list[str] = []
+        for spec in REVIEW_SECTIONS:
+            heading = str(spec.get("heading") or "")
+            q = section_search_query(topic, spec)
+            passages: list[dict[str, Any]] = []
+            try:
+                passages = self._retrieve_compose_passages(
+                    topic, papers, mem, top_k=6, query=q,
                 )
-        evidence = "\n".join(lines)
-        if len(evidence) > 14000:
-            evidence = evidence[:14000] + "\n…（证据已截断）"
+            except Exception as e:
+                logger.warning("分节检索失败，本节改用摘要 | heading=%s | error=%s", heading, e)
+            if not passages:
+                print(
+                    f"  [AGENT] 「{heading}」无专属片段，仍写本节（依据摘要）",
+                    flush=True,
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"  [AGENT] 撰写「{heading}」| 片段 {len(passages)} | query={q[:60]}",
+                    flush=True,
+                    file=sys.stderr,
+                )
+            user_prompt = build_section_writer_user(
+                topic, spec, papers, passages, prior_sections=parts,
+            )
+            section_md = ""
+            min_section = max(80, int(spec.get("target_chars") or 400) // 4)
+            for attempt in (1, 2):
+                try:
+                    raw = self.llm.chat(
+                        system_prompt=WRITER_SECTION_SYSTEM,
+                        user_prompt=user_prompt,
+                        temperature=0.4,
+                        timeout=180,
+                        max_tokens=2048,
+                    )
+                    section_md = self._unwrap_markdown(raw).strip()
+                except Exception as e:
+                    logger.warning(
+                        "分节写作失败 | heading=%s | attempt=%s | error=%s",
+                        heading, attempt, e,
+                    )
+                    section_md = ""
+                if len(section_md) >= min_section:
+                    break
+                if attempt == 1:
+                    print(
+                        f"  [AGENT] 「{heading}」过短，只重写本节，其他节保留",
+                        flush=True,
+                        file=sys.stderr,
+                    )
+            idx = section_number(spec)
+            heading_md = section_heading_md(spec)
+            if len(section_md) < 20:
+                section_md = (
+                    f"{heading_md}\n\n"
+                    f"（本节未生成正文，依据摘要：相关工作见题录白名单，原文片段不足。）"
+                )
+            section_md = strip_inline_bibliographies(section_md)
+            section_md = ensure_section_heading(section_md, idx, heading)
+            parts.append(section_md)
 
-        user_prompt = (
-            f"{evidence}\n\n"
-            f"{REVIEW_WRITING_SPEC}\n"
-            "请直接输出完整 Markdown 综述，不要 JSON，不要代码围栏。"
-        )
-        raw = self.llm.chat(
-            system_prompt=(
-                "你是学术文献综述作者。只根据用户提供的检索文献写作；"
-                "必须满足给定体例和字数。"
-            ),
-            user_prompt=user_prompt,
-            temperature=0.4,
-            timeout=600,
-            max_tokens=8192,
-        )
-        return self._unwrap_markdown(raw)
+        body = "\n\n".join(parts).strip()
+        refs = format_references(papers)
+        return polish_review_markdown(f"{body}\n\n{refs}", topic=topic)
 
     def _end_node(self, state: AgentState) -> AgentState:
         """结束节点：记录最终步骤（不包含 action）。"""
@@ -746,6 +942,7 @@ class LangGraphAgent:
                     final_state["topic"],
                     final_state["steps"],
                     extra_papers=mem.papers,
+                    memory=mem,
                 )
                 if rewritten:
                     final_answer = rewritten

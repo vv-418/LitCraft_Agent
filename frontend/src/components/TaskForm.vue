@@ -1,38 +1,48 @@
 <template>
   <form class="panel form-grid" @submit.prevent="onSubmit">
-    <label class="field">
-      研究主题
-      <span class="hint">输入你想要综述的学术主题，支持中英文</span>
+    <div class="field">
+      <div class="field-head">
+        研究主题
+        <HelpTip>要综述的学术主题，支持中英文。</HelpTip>
+      </div>
       <input
         v-model="topic"
         type="text"
         placeholder="例：Transformer 在自然语言处理中的应用"
         required
       />
-    </label>
-
-    <label class="field">
-      起始年份（选填，0 表示不限）
-      <span class="hint">如 2020 表示只搜索该年份及之后的文献</span>
-      <input v-model.number="year" type="number" min="0" max="2100" />
-    </label>
-
-    <div class="field-row">
-      <label class="field">
-        单源保留篇数
-        <span class="hint">每个来源（arXiv / S2 / Scholar）每次最多取多少篇</span>
-        <input v-model.number="perSourceLimit" type="number" min="1" max="50" />
-      </label>
-      <label class="field">
-        最终保留篇数
-        <span class="hint">多源合并去重后对外保留多少篇</span>
-        <input v-model.number="finalLimit" type="number" min="1" max="50" />
-      </label>
     </div>
 
-    <label class="field">
-      下载论文保存位置（选填）
-      <span class="hint">下载时直接写入 output/日期/主题/lit_source/，结束后只重命名为「标题__网址」。点浏览可改文件夹</span>
+    <div class="field">
+      <div class="field-head">
+        起始年份
+        <HelpTip>只搜该年及之后的文献；填 0 表示不限。</HelpTip>
+      </div>
+      <input v-model.number="year" type="number" min="0" max="2100" />
+    </div>
+
+    <div class="field-row">
+      <div class="field">
+        <div class="field-head">
+          单源保留篇数
+          <HelpTip>每个来源（arXiv / S2 / Scholar）每次最多取多少篇。</HelpTip>
+        </div>
+        <input v-model.number="perSourceLimit" type="number" min="1" max="50" />
+      </div>
+      <div class="field">
+        <div class="field-head">
+          最终保留篇数
+          <HelpTip>多源合并去重后对外保留多少篇。</HelpTip>
+        </div>
+        <input v-model.number="finalLimit" type="number" min="1" max="50" />
+      </div>
+    </div>
+
+    <div class="field">
+      <div class="field-head">
+        保存位置
+        <HelpTip>论文默认写入 output/日期/主题/lit_source/，结束后按「标题__网址」命名。点浏览可改文件夹。</HelpTip>
+      </div>
       <div class="path-row">
         <input
           v-model="papersSavePath"
@@ -43,7 +53,7 @@
           {{ pickingPapers ? '选择中…' : '浏览' }}
         </button>
       </div>
-    </label>
+    </div>
 
     <button class="btn btn-primary" type="submit" :disabled="submitting || !topic.trim()">
       {{ submitting ? '提交中…' : '开始生成综述' }}
@@ -56,6 +66,8 @@
 <script setup>
 import { ref } from 'vue'
 import { startTask, pickSavePath } from '../api/client'
+import { llmPayloadForStart } from '../llmConfig'
+import HelpTip from './HelpTip.vue'
 
 const emit = defineEmits(['started'])
 
@@ -135,6 +147,7 @@ async function onSubmit() {
       final_limit: clampLimit(finalLimit.value),
       papers_output_dir: papers.directory,
       papers_filename: papersPrefix(papers.filename),
+      ...llmPayloadForStart(),
     })
     emit('started', { taskId: data.task_id, topic: trimmed })
   } catch (e) {

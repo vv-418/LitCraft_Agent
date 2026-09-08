@@ -1,52 +1,59 @@
 # LitCraft Agent
 
-LitCraft Agent 是一个从 0 开始实现的智能文献综述 Agent 项目，支持从学术搜索引擎检索论文、下载 PDF、解析全文、向量存储、语义检索，最终自动生成文献综述。
+LitCraft Agent 是一个从 0 实现的智能文献综述 Agent：多源学术检索、PDF 下载解析、文本+插图向量检索，再按固定体例生成综述并导出 PDF。
+
+Web 主界面是 **FastAPI + Vue 3**；也可用命令行 `main.py`。
+
+## 结果图
+
+![image-20260908232853828](images\image-20260908232853828.png)
+
+生成示例：
+
+![image-20260908233241189](images\image-20260908233241189.png)
+
+![image-20260908233201760](images\image-20260908233053542.png)
 
 ## 快速开始
 
 ### 1. 配置环境变量
 
-创建 `.env` 文件（或从 `.env.example` 复制），填入以下内容：
+```bash
+cp .env.example .env
+```
+
+编辑 `.env`，至少填齐：
 
 ```env
 LLM_MODEL_ID=你的模型名
 LLM_API_KEY=你的 API Key
 LLM_BASE_URL=你的 OpenAI-compatible 接口地址
-LLM_TIMEOUT=60
-
-# 文本检索：dense（默认）| hybrid
-RETRIEVAL_MODE=dense
-
-# 真·多模态（CLIP 图文同空间）。模型缺失时自动跳过，不影响文本 RAG
-MULTIMODAL_ENABLED=1
-MULTIMODAL_MODEL=./models/clip-ViT-B-32
-MULTIMODAL_ALLOW_DOWNLOAD=0
-MULTIMODAL_MAX_IMAGES=24
+LLM_TIMEOUT=120
 ```
 
-可选：首次有网时下载模型到本地（之后可离线）。
+本地 Ollama 可用 `LLM_BASE_URL=http://localhost:11434/v1`，`LLM_API_KEY` 填任意非空值（如 `ollama`）。完整变量说明见 `.env.example`。
 
-**文本多语 embedding（必选，P2）：**
+**不要提交 `.env`。** 仓库里只保留 `.env.example`。
+
+可选：首次有网时把模型下到本地（之后可离线）。
+
+**文本多语 embedding（必选）：**
 
 ```bash
 # ModelScope（国内更稳）
 modelscope download --model BAAI/bge-m3 --local_dir ./models/bge-m3
 ```
 
-**CLIP 插图（可选多模态）：** 优先 sentence-transformers 布局；也可放 HuggingFace OpenAI CLIP（`config.json` 含 `model_type=clip`），加载器会自动识别：
+**CLIP 插图（可选多模态）：** 模型缺失时自动跳过，不影响文本 RAG。
 
 ```bash
-# Hugging Face（或镜像）
 huggingface-cli download sentence-transformers/clip-ViT-B-32 --local-dir ./models/clip-ViT-B-32
-
-# 国内可用 ModelScope
-# modelscope download --model openai-mirror/clip-vit-base-patch32 --local_dir ./models/clip-ViT-B-32
 ```
 
-旧版 MiniLM / bge-zh **双集合索引与 bge-m3 不兼容**，换模型后请重建：
+旧版 MiniLM / bge-zh 双集合索引与 bge-m3 不兼容，换模型后需重建向量库，例如：
 
 ```bash
-python benchmark/seed_chroma.py "output/2026-09-07/高速公路天气图像识别/lit_source" --rebuild
+python benchmark/seed_chroma.py "<已下载 PDF 目录>" --rebuild
 ```
 
 ### 2. 安装依赖
@@ -57,38 +64,26 @@ pip install -r requirements.txt
 
 ### 3. 运行
 
-```bash
-# 基本用法
-python main.py --topic "你的研究主题"
-
-# 限制文献年份（只搜索 2020 年及之后的文献）
-python main.py --topic "Transformer 在 NLP 中的应用" --year-from 2020
-
-# 启用 PDF 保存（指定输出路径）
-python main.py --topic "RAG 在医学问答中的应用" --save-pdf output/review.pdf
-
-#专用python路径
-d:\Users\vv\Anaconda3\envs\litcraft\python.exe
-```
-
-### Web 方式（FastAPI + Vue）
+**推荐：Web（FastAPI + Vue）**
 
 ```bash
-# 终端1：启动 FastAPI 后端（端口 8000）
+# 终端 1：后端（端口 8000）
 python -m uvicorn api.server:app --reload --port 8000
 
-# 终端2：启动 Vue 前端（端口 5173）
+# 终端 2：前端（端口 5173）
 cd frontend
 npm install
 npm run dev
 ```
 
-然后浏览器打开 http://localhost:5173 即可使用图形界面。
+浏览器打开 http://localhost:5173 。侧边栏可配置本地或在线大模型（如 DeepSeek）；未填齐时仍用 `.env` 默认模型。
 
-可选：旧版 Streamlit 前端仍保留在 `frontend_streamlit/`：
+**命令行：**
 
 ```bash
-python -m streamlit run frontend_streamlit/app.py --server.port 8501
+python main.py --topic "你的研究主题"
+python main.py --topic "Transformer 在 NLP 中的应用" --year-from 2020
+python main.py --topic "RAG 在医学问答中的应用" --save-pdf output/review.pdf
 ```
 
 ## 目录结构
@@ -99,52 +94,35 @@ LitCraft_Agent/
 ├── llm_client.py              # 大模型调用封装
 ├── requirements.txt
 ├── README.md
-├── QUICK_START.md
+├── .env.example
 │
 ├── agent/
-│   ├── __init__.py
-│   ├── models.py              # 数据结构定义（AgentStep, AgentResult）
-│   ├── prompts.py             # 提示词模板
-│   └── langgraph_agent.py     # LangGraph ReAct Agent 主循环
+│   ├── models.py
+│   ├── prompts.py
+│   ├── memory.py              # 跨步骤研究记忆（题录 / query）
+│   └── langgraph_agent.py
 │
 ├── tools/
-│   ├── __init__.py
-│   ├── base.py                # Tool / ToolSpec 基类
-│   ├── registry.py            # 工具注册表
-│   ├── paper_downloader.py    # PDF 下载
-│   ├── pdf_parser.py          # PDF：pdfplumber 文本/表 + PyMuPDF 抽图
-│   ├── multimodal_embedder.py # CLIP 图文同空间编码（可选）
-│   ├── text_chunker.py        # 长文本分块
-│   ├── vector_store.py        # Chroma：多语 bge-m3 文本集合 + *_mm 插图
-│   ├── advanced_retrieval.py  # Dense 基线；可选 hybrid；文本+图像加权 RRF
-│   ├── reranker.py            # bge-reranker-v2-m3 本地重排
-│   │
+│   ├── paper_downloader.py
+│   ├── pdf_parser.py
+│   ├── multimodal_embedder.py # CLIP 图文同空间（可选）
+│   ├── vector_store.py
+│   ├── advanced_retrieval.py  # Dense；可选 hybrid；文本+图像加权 RRF
 │   └── search/
-│       ├── __init__.py
-│       ├── arxiv_search.py          # arXiv API 搜索
-│       ├── google_scholar.py        # Google Scholar 搜索（via scholarly）
-│       ├── semantic_scholar.py      # Semantic Scholar API 搜索
-│       └── multi_source_search.py   # 多源聚合搜索
+│       ├── arxiv_search.py
+│       ├── google_scholar.py
+│       ├── semantic_scholar.py
+│       ├── openalex.py
+│       ├── crossref.py
+│       ├── europe_pmc.py
+│       └── multi_source_search.py
 │
-├── output/                   # 输出：{日期}/{主题}/lit_source、figures、papers
-├── storage/
-│   └── chroma/               # Chroma 向量数据库持久化目录
-│
-├── api/                      # FastAPI 后端服务
-│   ├── __init__.py
-│   ├── schemas.py            # 请求/响应数据结构
-│   ├── task_manager.py       # 后台任务管理器
-│   └── server.py             # FastAPI 路由入口
-│
-├── frontend/                 # Vue 3 + Vite 前端（主界面）
-│   ├── package.json
-│   ├── vite.config.js
-│   └── src/
-│
-├── frontend_streamlit/
-│   └── app.py                # 旧版 Streamlit 前端（备份）
-│
-└── models/                   # 本地模型（bge-m3 / CLIP / reranker）
+├── api/                       # FastAPI
+├── frontend/                  # Vue 3 主界面
+├── frontend_streamlit/        # 旧版 Streamlit（备份）
+├── output/                    # 运行产物（不进 Git）
+├── models/                    # 本地模型（不进 Git）
+└── storage/                   # Chroma 持久化（不进 Git）
 ```
 
 ## 脚本说明
@@ -594,6 +572,7 @@ API 路由：
 | GET | `/api/agent/status/{task_id}` | 查询任务状态 |
 | GET | `/api/agent/result/{task_id}` | 获取最终结果 |
 | GET | `/api/agent/steps/{task_id}` | 获取执行步骤（可轮询） |
+| GET | `/api/llm/info` | 默认模型公开信息（不含密钥） |
 | GET | `/api/output/{filename}` | 下载生成的 PDF 文件 |
 | GET | `/api/history` | 历史任务列表 |
 
@@ -641,8 +620,9 @@ AgentResultResponse
 
 | 页面 | 功能 |
 |------|------|
-| 新建综述 (`/`) | 输入研究主题、年份过滤、PDF 选项；提交后轮询展示执行轨迹与综述正文 |
-| 历史记录 (`/history`) | 按创建时间倒序列出历史任务，可跳转查看结果 |
+| 新建综述 (`/`) | 输入主题、年份、篇数与保存位置；提交后轮询进度与综述 |
+| 历史记录 (`/history`) | 历史任务列表 |
+| 模型配置 (`/settings`) | 本地 / 在线大模型（未填齐则用 `.env`） |
 
 开发启动：`cd frontend && npm install && npm run dev`（默认 http://localhost:5173）。
 
@@ -694,13 +674,19 @@ agent.run(topic) 进入 ReAct 循环
 
 ### `.env` 文件
 
+从 `.env.example` 复制为 `.env`。必填三项：`LLM_MODEL_ID`、`LLM_API_KEY`、`LLM_BASE_URL`。检索、多模态、翻译等可选项均在 `.env.example` 中有注释。
+
 | 变量 | 必填 | 说明 |
 |------|------|------|
-| `LLM_MODEL_ID` | ✅ | 模型名（如 `gpt-4o`、`deepseek-chat`） |
-| `LLM_API_KEY` | ✅ | API 密钥 |
-| `LLM_BASE_URL` | ✅ | OpenAI-compatible API 地址 |
-| `LLM_TIMEOUT` | ❌ | 请求超时（秒，默认 60） |
-| `GOOGLE_SCHOLAR_PROXY` | ❌ | Google Scholar 代理地址（如 `http://127.0.0.1:10808`） |
+| `LLM_MODEL_ID` | ✅ | 模型名（如 `qwen2.5:14b-instruct`、`deepseek-chat`） |
+| `LLM_API_KEY` | ✅ | API 密钥（Ollama 可填 `ollama`） |
+| `LLM_BASE_URL` | ✅ | OpenAI 兼容地址（Ollama 一般为 `http://localhost:11434/v1`） |
+| `LLM_TIMEOUT` | ❌ | 请求超时秒数（默认见 `.env.example`） |
+| `LLM_NATIVE_TOOLS` | ❌ | 原生 function calling，默认开 |
+| `RETRIEVAL_MODE` | ❌ | `dense`（默认）或 `hybrid` |
+| `MULTIMODAL_ENABLED` | ❌ | CLIP 插图，默认开；模型缺失则跳过 |
+| `SEMANTIC_SCHOLAR_API_KEY` | ❌ | Semantic Scholar 请求头 |
+| `GOOGLE_SCHOLAR_PROXY` | ❌ | Google Scholar 代理 |
 
 ### 环境要求
 

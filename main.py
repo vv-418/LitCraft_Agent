@@ -151,7 +151,11 @@ def main() -> None:
                 review_dir = str(resolved)
 
         def _write_review(output_path: str) -> str:
-            return pdf_gen.run({"text": result.final_answer, "output_path": output_path})
+            return pdf_gen.run({
+                "text": result.final_answer,
+                "output_path": output_path,
+                "topic": args.topic,
+            })
 
         write_review = _write_review
 

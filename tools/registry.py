@@ -30,8 +30,8 @@ class ToolRegistry:
         # 拦截"生成综述"类工具名 → 提示 LLM 改用 final_answer
         if name.lower() in self._GENERATION_ALIASES:
             return (
-                "你不需要调用工具来生成综述。请直接在 JSON 中输出 "
-                '{"final_answer": "你的综述正文"} 来返回最终结果。'
+                "不要用工具写综述。请调用 final_answer 结束检索"
+                "（或在 JSON 协议下输出 {\"final_answer\": \"检索结束\"}）。"
             )
         tool = self._tools.get(name)
         if not tool:
@@ -44,6 +44,56 @@ class ToolRegistry:
             return tool.run(tool_input)
         except Exception as exc:
             return f"Tool '{name}' failed: {exc}"
+
+    _SYSTEM_OWNED_SEARCH_KEYS = frozenset({"limit", "per_source_limit", "year_from"})
+
+    def openai_tools(self) -> list[dict[str, Any]]:
+        """OpenAI / DeepSeek 兼容的 tools 列表（含结束检索的 final_answer）。"""
+        tools: list[dict[str, Any]] = []
+        for tool in self._tools.values():
+            schema = tool.input_schema if isinstance(tool.input_schema, dict) else {
+                "type": "object",
+                "properties": {},
+            }
+            if schema.get("type") != "object":
+                schema = {"type": "object", "properties": {}, "required": []}
+            else:
+                schema = {
+                    "type": "object",
+                    "properties": dict(schema.get("properties") or {}),
+                    "required": list(schema.get("required") or []),
+                }
+                for key in self._SYSTEM_OWNED_SEARCH_KEYS:
+                    schema["properties"].pop(key, None)
+                schema["required"] = [k for k in schema["required"] if k not in self._SYSTEM_OWNED_SEARCH_KEYS]
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": (tool.description or "")[:512],
+                    "parameters": schema,
+                },
+            })
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "final_answer",
+                "description": (
+                    "End the literature search phase. Do not write the full survey here; "
+                    "the system will compose it afterwards."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reason": {
+                            "type": "string",
+                            "description": "Why retrieval can stop (one short sentence)",
+                        }
+                    },
+                },
+            },
+        })
+        return tools
 
     def render_descriptions(self) -> str:
         """把所有工具说明渲染成 JSON 字符串，提供给大模型阅读。"""

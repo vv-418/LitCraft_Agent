@@ -1,0 +1,818 @@
+{
+  "summary": {
+    "dataset": "scifact",
+    "split": "test",
+    "num_queries": 20,
+    "collection": "scifact_beir",
+    "traditional_recall@5": 0.825,
+    "traditional_recall@10": 0.85,
+    "traditional_time_avg": 0.0142,
+    "advanced_recall@5": 0.825,
+    "advanced_recall@10": 0.85,
+    "advanced_time_avg": 1.1683
+  },
+  "rows": [
+    {
+      "query_id": "1",
+      "query": "0-dimensional biomaterials show inductive properties.",
+      "gold_count": 1,
+      "gold_ids": [
+        "31715818"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "29638116",
+        "4346436",
+        "3874000",
+        "10786948",
+        "31715818",
+        "17388232",
+        "86129154",
+        "927561",
+        "19855358",
+        "1769799"
+      ],
+      "traditional_recall@5": 1.0,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.014,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "4346436",
+        "803312",
+        "25404036",
+        "31715818",
+        "29638116",
+        "6863070",
+        "10786948",
+        "1769799",
+        "121581019",
+        "3874000"
+      ],
+      "advanced_recall@5": 1.0,
+      "advanced_recall@10": 1.0,
+      "advanced_time": 2.109
+    },
+    {
+      "query_id": "3",
+      "query": "1,000 genomes project enables mapping of genetic sequence variation consisting of rare variants with larger penetrance effects than common variants.",
+      "gold_count": 1,
+      "gold_ids": [
+        "14717500"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "2739854",
+        "23389795",
+        "14717500",
+        "19058822",
+        "15153602",
+        "13914198",
+        "4632921",
+        "32181055",
+        "13519661",
+        "1388704"
+      ],
+      "traditional_recall@5": 1.0,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.014,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "14717500",
+        "4414547",
+        "19058822",
+        "2739854",
+        "4632921",
+        "23389795",
+        "13914198",
+        "13916484",
+        "32181055",
+        "25536577"
+      ],
+      "advanced_recall@5": 1.0,
+      "advanced_recall@10": 1.0,
+      "advanced_time": 0.998
+    },
+    {
+      "query_id": "5",
+      "query": "1/2000 in UK have abnormal PrP positivity.",
+      "gold_count": 1,
+      "gold_ids": [
+        "13734012"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "3413083",
+        "13734012",
+        "13791044",
+        "21186109",
+        "5372432",
+        "22194407",
+        "27063470",
+        "8670178",
+        "18617259",
+        "9764256"
+      ],
+      "traditional_recall@5": 1.0,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.013,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "13734012",
+        "841371",
+        "42291761",
+        "3413083",
+        "5372432",
+        "15663829",
+        "3580005",
+        "8670178",
+        "18617259",
+        "13791044"
+      ],
+      "advanced_recall@5": 1.0,
+      "advanced_recall@10": 1.0,
+      "advanced_time": 1.209
+    },
+    {
+      "query_id": "13",
+      "query": "5% of perinatal mortality is due to low birth weight.",
+      "gold_count": 1,
+      "gold_ids": [
+        "1606628"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "7662395",
+        "4791384",
+        "1263446",
+        "11748341",
+        "8529693",
+        "23557241",
+        "8842332",
+        "17450673",
+        "27123743",
+        "26611834"
+      ],
+      "traditional_recall@5": 0.0,
+      "traditional_recall@10": 0.0,
+      "traditional_time": 0.012,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "7662395",
+        "26611834",
+        "1263446",
+        "8529693",
+        "8842332",
+        "17450673",
+        "25182647",
+        "2425364",
+        "30786800",
+        "103007"
+      ],
+      "advanced_recall@5": 0.0,
+      "advanced_recall@10": 0.0,
+      "advanced_time": 0.835
+    },
+    {
+      "query_id": "36",
+      "query": "A deficiency of vitamin B12 increases blood levels of homocysteine.",
+      "gold_count": 2,
+      "gold_ids": [
+        "11705328",
+        "5152028"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "33409100",
+        "3215494",
+        "11705328",
+        "18557974",
+        "16252863",
+        "42441846",
+        "21636085",
+        "37424881",
+        "5152028",
+        "10557471"
+      ],
+      "traditional_recall@5": 0.5,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.012,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "18557974",
+        "33409100",
+        "23267371",
+        "37424881",
+        "16252863",
+        "21636085",
+        "42441846",
+        "3215494",
+        "11705328",
+        "24049225"
+      ],
+      "advanced_recall@5": 0.0,
+      "advanced_recall@10": 0.5,
+      "advanced_time": 0.782
+    },
+    {
+      "query_id": "42",
+      "query": "A high microerythrocyte count raises vulnerability to severe anemia in homozygous alpha (+)- thalassemia trait subjects.",
+      "gold_count": 1,
+      "gold_ids": [
+        "18174210"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "40913091",
+        "18174210",
+        "27889071",
+        "45218443",
+        "4449524",
+        "27162821",
+        "10128893",
+        "6315132",
+        "22482024",
+        "21636085"
+      ],
+      "traditional_recall@5": 1.0,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.017,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "18174210",
+        "40913091",
+        "10128893",
+        "27889071",
+        "6315132",
+        "4449524",
+        "45218443",
+        "22482024",
+        "42441846",
+        "8385277"
+      ],
+      "advanced_recall@5": 1.0,
+      "advanced_recall@10": 1.0,
+      "advanced_time": 1.207
+    },
+    {
+      "query_id": "48",
+      "query": "A total of 1,000 people in the UK are asymptomatic carriers of vCJD infection.",
+      "gold_count": 1,
+      "gold_ids": [
+        "13734012"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "18617259",
+        "11349166",
+        "24512064",
+        "5850219",
+        "44672703",
+        "29955650",
+        "21644993",
+        "43587663",
+        "13322804",
+        "27063470"
+      ],
+      "traditional_recall@5": 0.0,
+      "traditional_recall@10": 0.0,
+      "traditional_time": 0.017,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "11349166",
+        "24512064",
+        "21644993",
+        "44672703",
+        "13322804",
+        "5850219",
+        "19661996",
+        "18617259",
+        "31560225",
+        "46355579"
+      ],
+      "advanced_recall@5": 0.0,
+      "advanced_recall@10": 0.0,
+      "advanced_time": 1.446
+    },
+    {
+      "query_id": "49",
+      "query": "ADAR1 binds to Dicer to cleave pre-miRNA.",
+      "gold_count": 1,
+      "gold_ids": [
+        "5953485"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "5953485",
+        "23913146",
+        "5702790",
+        "8006440",
+        "2619579",
+        "1333643",
+        "42662816",
+        "15590539",
+        "7029990",
+        "12871002"
+      ],
+      "traditional_recall@5": 1.0,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.013,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "5953485",
+        "13964633",
+        "5702790",
+        "15590539",
+        "1333643",
+        "8006440",
+        "22362025",
+        "7029990",
+        "5253987",
+        "17544977"
+      ],
+      "advanced_recall@5": 1.0,
+      "advanced_recall@10": 1.0,
+      "advanced_time": 1.031
+    },
+    {
+      "query_id": "50",
+      "query": "AIRE is expressed in some skin tumors.",
+      "gold_count": 1,
+      "gold_ids": [
+        "12580014"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "12580014",
+        "39559521",
+        "25738896",
+        "12489130",
+        "4561402",
+        "29785642",
+        "19736671",
+        "13989491",
+        "15707049",
+        "17844478"
+      ],
+      "traditional_recall@5": 1.0,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.014,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "12580014",
+        "39559521",
+        "19736671",
+        "25738896",
+        "29785642",
+        "38037690",
+        "43014661",
+        "25853741",
+        "17844478",
+        "4561402"
+      ],
+      "advanced_recall@5": 1.0,
+      "advanced_recall@10": 1.0,
+      "advanced_time": 1.262
+    },
+    {
+      "query_id": "51",
+      "query": "ALDH1 expression is associated with better breast cancer outcomes.",
+      "gold_count": 1,
+      "gold_ids": [
+        "45638119"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "45638119",
+        "32001951",
+        "17648235",
+        "29366489",
+        "43385013",
+        "16086778",
+        "1866911",
+        "2014909",
+        "1554348",
+        "7821634"
+      ],
+      "traditional_recall@5": 1.0,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.012,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "45638119",
+        "2140497",
+        "3285322",
+        "17648235",
+        "15721252",
+        "21439640",
+        "4429932",
+        "7821634",
+        "13007205",
+        "32001951"
+      ],
+      "advanced_recall@5": 1.0,
+      "advanced_recall@10": 1.0,
+      "advanced_time": 0.971
+    },
+    {
+      "query_id": "53",
+      "query": "ALDH1 expression is associated with poorer prognosis in breast cancer.",
+      "gold_count": 1,
+      "gold_ids": [
+        "45638119"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "45638119",
+        "32001951",
+        "17648235",
+        "29366489",
+        "7821634",
+        "16086778",
+        "43385013",
+        "2014909",
+        "1554348",
+        "1866911"
+      ],
+      "traditional_recall@5": 1.0,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.012,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "45638119",
+        "7821634",
+        "29366489",
+        "25973484",
+        "21439640",
+        "17648235",
+        "4429932",
+        "15721252",
+        "8963413",
+        "32001951"
+      ],
+      "advanced_recall@5": 1.0,
+      "advanced_recall@10": 1.0,
+      "advanced_time": 1.007
+    },
+    {
+      "query_id": "54",
+      "query": "AMP-activated protein kinase (AMPK) activation increases inflammation-related fibrosis in the lungs.",
+      "gold_count": 1,
+      "gold_ids": [
+        "49556906"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "49556906",
+        "3973445",
+        "1590744",
+        "24721866",
+        "38533515",
+        "5172048",
+        "2272614",
+        "22621251",
+        "3419709",
+        "28712203"
+      ],
+      "traditional_recall@5": 1.0,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.018,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "49556906",
+        "3973445",
+        "1590744",
+        "5172048",
+        "22621251",
+        "24721866",
+        "9752604",
+        "19313533",
+        "5573975",
+        "26025820"
+      ],
+      "advanced_recall@5": 1.0,
+      "advanced_recall@10": 1.0,
+      "advanced_time": 1.01
+    },
+    {
+      "query_id": "56",
+      "query": "APOE4 expression in iPSC-derived neurons increases AlphaBeta production and tau phosphorylation causing GABA neuron degeneration.",
+      "gold_count": 1,
+      "gold_ids": [
+        "4709641"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "4709641",
+        "22185730",
+        "22116439",
+        "15347087",
+        "6492658",
+        "18852643",
+        "18038250",
+        "20937018",
+        "3140772",
+        "30351165"
+      ],
+      "traditional_recall@5": 1.0,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.015,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "4709641",
+        "22185730",
+        "4345605",
+        "35520219",
+        "22116439",
+        "3140772",
+        "6492658",
+        "4459491",
+        "7039855",
+        "10790846"
+      ],
+      "advanced_recall@5": 1.0,
+      "advanced_recall@10": 1.0,
+      "advanced_time": 1.332
+    },
+    {
+      "query_id": "57",
+      "query": "APOE4 expression in iPSC-derived neurons increases AlphaBeta production and tau phosphorylation, delaying GABA neuron degeneration.",
+      "gold_count": 1,
+      "gold_ids": [
+        "4709641"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "4709641",
+        "22185730",
+        "22116439",
+        "15347087",
+        "6492658",
+        "18852643",
+        "20937018",
+        "18038250",
+        "30351165",
+        "3140772"
+      ],
+      "traditional_recall@5": 1.0,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.015,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "4709641",
+        "22185730",
+        "4345605",
+        "35520219",
+        "22116439",
+        "3140772",
+        "6492658",
+        "4459491",
+        "7039855",
+        "10790846"
+      ],
+      "advanced_recall@5": 1.0,
+      "advanced_recall@10": 1.0,
+      "advanced_time": 1.304
+    },
+    {
+      "query_id": "70",
+      "query": "Activation of PPM1D suppresses p53 function.",
+      "gold_count": 2,
+      "gold_ids": [
+        "4414547",
+        "5956380"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "9483851",
+        "27949347",
+        "11903247",
+        "6896063",
+        "28107602",
+        "31624828",
+        "9169645",
+        "21557055",
+        "37204802",
+        "14460402"
+      ],
+      "traditional_recall@5": 0.0,
+      "traditional_recall@10": 0.0,
+      "traditional_time": 0.013,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "11903247",
+        "4414547",
+        "9169645",
+        "4389394",
+        "14460402",
+        "43880096",
+        "23985464",
+        "5254463",
+        "27949347",
+        "31624828"
+      ],
+      "advanced_recall@5": 0.5,
+      "advanced_recall@10": 0.5,
+      "advanced_time": 0.778
+    },
+    {
+      "query_id": "72",
+      "query": "Activator-inhibitor pairs are provided dorsally by Admpchordin.",
+      "gold_count": 1,
+      "gold_ids": [
+        "6076903"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "6076903",
+        "8997410",
+        "2119889",
+        "14492964",
+        "25970224",
+        "5700349",
+        "1686881",
+        "19485649",
+        "38380061",
+        "34735369"
+      ],
+      "traditional_recall@5": 1.0,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.014,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "6076903",
+        "25970224",
+        "2119889",
+        "2335873",
+        "20313748",
+        "1686881",
+        "12631697",
+        "14492964",
+        "20544428",
+        "16511863"
+      ],
+      "advanced_recall@5": 1.0,
+      "advanced_recall@10": 1.0,
+      "advanced_time": 1.331
+    },
+    {
+      "query_id": "75",
+      "query": "Active H. pylori urease has a polymeric structure that compromises two subunits, UreA and UreB.",
+      "gold_count": 1,
+      "gold_ids": [
+        "4387784"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "37768883",
+        "4387784",
+        "36233757",
+        "29214508",
+        "25657127",
+        "13965483",
+        "44947611",
+        "2099400",
+        "26488879",
+        "1744752"
+      ],
+      "traditional_recall@5": 1.0,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.014,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "4387784",
+        "36233757",
+        "13965483",
+        "44947611",
+        "25657127",
+        "26488879",
+        "29214508",
+        "37768883",
+        "38805486",
+        "20330519"
+      ],
+      "advanced_recall@5": 1.0,
+      "advanced_recall@10": 1.0,
+      "advanced_time": 1.185
+    },
+    {
+      "query_id": "94",
+      "query": "Albendazole is used to treat lymphatic filariasis.",
+      "gold_count": 1,
+      "gold_ids": [
+        "1215116"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "18321590",
+        "20428155",
+        "1215116",
+        "6503185",
+        "39424916",
+        "11441172",
+        "10617916",
+        "84085333",
+        "10703001",
+        "35768199"
+      ],
+      "traditional_recall@5": 1.0,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.013,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "1215116",
+        "20428155",
+        "39424916",
+        "18321590",
+        "11441172",
+        "46602807",
+        "10617916",
+        "14657344",
+        "10703001",
+        "12801438"
+      ],
+      "advanced_recall@5": 1.0,
+      "advanced_recall@10": 1.0,
+      "advanced_time": 1.358
+    },
+    {
+      "query_id": "99",
+      "query": "Alizarin forms hydrogen bonds with residues involved in PGAM1 substrate binding.",
+      "gold_count": 1,
+      "gold_ids": [
+        "18810195"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "20313748",
+        "18810195",
+        "11083121",
+        "16270577",
+        "3610282",
+        "10504681",
+        "30208015",
+        "2443495",
+        "8093935",
+        "25388309"
+      ],
+      "traditional_recall@5": 1.0,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.017,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "18810195",
+        "30208015",
+        "21754541",
+        "20313748",
+        "2443495",
+        "6974477",
+        "12922760",
+        "19752008",
+        "12225214",
+        "33720691"
+      ],
+      "advanced_recall@5": 1.0,
+      "advanced_recall@10": 1.0,
+      "advanced_time": 1.263
+    },
+    {
+      "query_id": "100",
+      "query": "All hematopoietic stem cells segregate their chromosomes randomly.",
+      "gold_count": 1,
+      "gold_ids": [
+        "4381486"
+      ],
+      "traditional_retrieved": 10,
+      "traditional_ids": [
+        "34982259",
+        "14550841",
+        "4381486",
+        "25516011",
+        "5415832",
+        "92499",
+        "13116880",
+        "9154703",
+        "1944452",
+        "11020675"
+      ],
+      "traditional_recall@5": 1.0,
+      "traditional_recall@10": 1.0,
+      "traditional_time": 0.014,
+      "advanced_retrieved": 10,
+      "advanced_ids": [
+        "4381486",
+        "34982259",
+        "5415832",
+        "22186938",
+        "25516011",
+        "92499",
+        "13116880",
+        "7583161",
+        "42787108",
+        "11020675"
+      ],
+      "advanced_recall@5": 1.0,
+      "advanced_recall@10": 1.0,
+      "advanced_time": 0.948
+    }
+  ]
+}

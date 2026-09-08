@@ -8,6 +8,7 @@
 - GET  /api/agent/steps/{id}  → 获取执行轨迹
 - GET  /api/output/{filename} → 下载 PDF 文件
 - GET  /api/history            → 历史任务列表
+- GET  /api/llm/info           → 默认大模型公开信息（不含密钥）
 """
 
 import os
@@ -35,8 +36,10 @@ from api.schemas import (
     TaskListItem,
     PickSavePathRequest,
     AgentSavePdfRequest,
+    LlmInfoResponse,
 )
 from api.task_manager import TaskManager
+from llm_client import public_llm_defaults, resolve_user_llm_kwargs
 from utils.logger import get_logger
 
 logger = get_logger("api")
@@ -71,6 +74,12 @@ async def root():
     }
 
 
+@app.get("/api/llm/info", response_model=LlmInfoResponse)
+async def llm_info():
+    """返回服务器默认大模型（.env）的公开信息，不含 API Key。"""
+    return LlmInfoResponse(**public_llm_defaults())
+
+
 @app.post("/api/agent/start", response_model=TaskStatusResponse)
 async def start_agent(req: AgentStartRequest):
     """启动一个新的文献综述 Agent 任务（异步执行）。
@@ -88,9 +97,17 @@ async def start_agent(req: AgentStartRequest):
     }
     ```
     """
+    llm_override = resolve_user_llm_kwargs(
+        model=req.llm_model_id,
+        api_key=req.llm_api_key,
+        base_url=req.llm_base_url,
+        timeout=req.llm_timeout,
+        source=req.llm_source,
+    )
     logger.info(
-        "收到新任务请求 | topic=%s | year_from=%s | save_pdf=%s | per_source=%s | final=%s",
+        "收到新任务请求 | topic=%s | year_from=%s | save_pdf=%s | per_source=%s | final=%s | llm=%s",
         req.topic, req.year_from, req.save_pdf, req.per_source_limit, req.final_limit,
+        f"{llm_override['model']}@{llm_override['baseUrl']}" if llm_override else "default",
     )
     task_id = task_manager.start_task(
         topic=req.topic,
@@ -103,6 +120,11 @@ async def start_agent(req: AgentStartRequest):
         papers_filename=req.papers_filename,
         review_output_dir=req.review_output_dir,
         review_filename=req.review_filename,
+        llm_model_id=req.llm_model_id,
+        llm_api_key=req.llm_api_key,
+        llm_base_url=req.llm_base_url,
+        llm_timeout=req.llm_timeout,
+        llm_source=req.llm_source,
     )
     task = task_manager.get_result(task_id)
     logger.info("任务已创建 | task_id=%s | topic=%.40s", task_id, req.topic)

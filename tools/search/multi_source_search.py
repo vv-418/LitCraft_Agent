@@ -921,6 +921,7 @@ class MultiSourceSearchTool(Tool):
         #  阶段2: 并发解析 → 分块 → 批量向量入库（4 线程流水线）
         # ═══════════════════════════════════════════════════════════
         indexed_count = 0
+        collection_name = ""
         if tool_input.get("auto_index", self.auto_index):
             from tools.pdf_parser import PDFParserTool
             from tools.text_chunker import TextChunkerTool
@@ -1073,6 +1074,8 @@ class MultiSourceSearchTool(Tool):
             },
             "indexed_chunks": indexed_count,
         }
+        if collection_name:
+            result["collection_name"] = collection_name
         if source_errors:
             result["source_errors"] = source_errors
 

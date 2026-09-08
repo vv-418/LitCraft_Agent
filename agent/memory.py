@@ -54,6 +54,7 @@ class ResearchMemory:
         self.papers: list[dict[str, Any]] = list(src.get("papers") or [])
         self.indexed_chunks: int = int(src.get("indexed_chunks") or 0)
         self.web_searches: int = int(src.get("web_searches") or 0)
+        self.collections: list[str] = list(src.get("collections") or [])
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -62,6 +63,7 @@ class ResearchMemory:
             "papers": self.papers,
             "indexed_chunks": self.indexed_chunks,
             "web_searches": self.web_searches,
+            "collections": self.collections,
         }
 
     def seen_query(self, query: str) -> bool:
@@ -107,6 +109,9 @@ class ResearchMemory:
         chunks = data.get("indexed_chunks")
         if isinstance(chunks, int) and chunks > self.indexed_chunks:
             self.indexed_chunks = chunks
+        coll = str(data.get("collection_name") or data.get("collection") or "").strip()
+        if coll and coll not in self.collections:
+            self.collections.append(coll)
 
         items = data.get("papers") or data.get("results") or data.get("documents") or []
         if not isinstance(items, list):

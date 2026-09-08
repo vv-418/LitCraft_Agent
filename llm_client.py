@@ -1,11 +1,133 @@
 import os
+import json
 import time
+from dataclasses import dataclass, field
 from openai import OpenAI
 from dotenv import load_dotenv
-from typing import List, Dict
+from typing import Any, List, Dict
 
 # 加载 .env 文件中的环境变量（override=True 确保覆盖系统环境变量残留）
 load_dotenv(override=True)
+
+
+def _native_tools_wanted() -> bool:
+    return os.getenv("LLM_NATIVE_TOOLS", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _is_tools_unsupported_error(err: Exception) -> bool:
+    text = str(err).lower()
+    keys = (
+        "tools",
+        "tool_choice",
+        "tool_calls",
+        "unknown parameter",
+        "unexpected keyword",
+        "does not support",
+        "not supported",
+        "function calling",
+        "invalid parameter",
+    )
+    return any(k in text for k in keys)
+
+
+@dataclass
+class LLMTurn:
+    """一次助手回复：文本 和/或 一次原生 tool_call。"""
+    content: str = ""
+    tool_name: str = ""
+    tool_args: dict[str, Any] = field(default_factory=dict)
+    used_native_tools: bool = False
+
+
+def parse_assistant_message(message: Any) -> LLMTurn:
+    """从 OpenAI-compatible message 抽出文本或第一个 tool_call。"""
+    content = getattr(message, "content", None) or ""
+    if not isinstance(content, str):
+        content = str(content or "")
+    tool_calls = getattr(message, "tool_calls", None) or []
+    if not tool_calls and isinstance(message, dict):
+        content = str(message.get("content") or content)
+        tool_calls = message.get("tool_calls") or []
+    if tool_calls:
+        tc = tool_calls[0]
+        fn = getattr(tc, "function", None)
+        if fn is None and isinstance(tc, dict):
+            fn = tc.get("function") or {}
+            name = str((fn or {}).get("name") or "")
+            raw_args = (fn or {}).get("arguments") or "{}"
+        else:
+            name = str(getattr(fn, "name", "") or "")
+            raw_args = getattr(fn, "arguments", None) or "{}"
+        args: dict[str, Any] = {}
+        if isinstance(raw_args, dict):
+            args = raw_args
+        else:
+            try:
+                parsed = json.loads(raw_args)
+                if isinstance(parsed, dict):
+                    args = parsed
+            except (json.JSONDecodeError, TypeError):
+                args = {"raw": str(raw_args)}
+        return LLMTurn(content=content.strip(), tool_name=name, tool_args=args, used_native_tools=True)
+    return LLMTurn(content=content.strip(), used_native_tools=False)
+
+# 加载 .env 文件中的环境变量（override=True 确保覆盖系统环境变量残留）
+load_dotenv(override=True)
+
+
+def resolve_user_llm_kwargs(
+    model: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    timeout: int | None = None,
+    source: str | None = None,
+) -> dict[str, Any] | None:
+    """解析用户覆盖的大模型参数。
+
+    online：三项都填齐才覆盖，否则返回 None（继续用 .env）。
+    local：未填项用 .env 补齐；三项都空则返回 None。
+    """
+    source_name = str(source or "").strip().lower()
+    if source_name not in ("local", "online"):
+        source_name = "online"
+    model_id = str(model or "").strip()
+    key = str(api_key or "").strip()
+    url = str(base_url or "").strip()
+    if source_name == "local":
+        if not (model_id or key or url):
+            return None
+        model_id = model_id or (os.getenv("LLM_MODEL_ID") or "").strip()
+        key = key or (os.getenv("LLM_API_KEY") or "").strip()
+        url = url or (os.getenv("LLM_BASE_URL") or "").strip()
+    if not (model_id and key and url):
+        return None
+    kwargs: dict[str, Any] = {"model": model_id, "apiKey": key, "baseUrl": url}
+    if timeout is not None and str(timeout).strip() != "":
+        try:
+            seconds = int(timeout)
+        except (TypeError, ValueError):
+            seconds = 0
+        if seconds > 0:
+            kwargs["timeout"] = seconds
+    return kwargs
+
+
+def public_llm_defaults() -> dict[str, Any]:
+    """给前端展示的默认模型信息，不含 API Key。"""
+    timeout_raw = os.getenv("LLM_TIMEOUT", "60")
+    try:
+        timeout = int(timeout_raw)
+    except (TypeError, ValueError):
+        timeout = 60
+    model = (os.getenv("LLM_MODEL_ID") or "").strip()
+    base_url = (os.getenv("LLM_BASE_URL") or "").strip()
+    has_key = bool((os.getenv("LLM_API_KEY") or "").strip())
+    return {
+        "model": model,
+        "base_url": base_url,
+        "timeout": timeout,
+        "ready": bool(model and base_url and has_key),
+    }
 
 
 class LitCraftAgentsLLM:
@@ -29,9 +151,8 @@ class LitCraftAgentsLLM:
         "o1":                   128000,
         "o1-mini":              128000,
         "o3-mini":              200000,
-        # the AI
-        "the AI-chat":         65536,
-        "deepseek-reasoner":     65536,
+        "deepseek-chat":        65536,
+        "deepseek-reasoner":    65536,
         # Anthropic
         "claude-3-5-sonnet":    200000,
         "claude-3-haiku":       200000,
@@ -62,6 +183,7 @@ class LitCraftAgentsLLM:
             raise ValueError("模型ID、API密钥和服务地址必须被提供或在.env文件中定义。")
 
         self.client = OpenAI(api_key=apiKey, base_url=baseUrl, timeout=timeout)
+        self._tools_unsupported = not _native_tools_wanted()
 
     @property
     def max_context_tokens(self) -> int:
@@ -109,6 +231,62 @@ class LitCraftAgentsLLM:
             json_mode=json_mode,
             stop=stop,
         )
+
+    def chat_turn(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0,
+        timeout: int | None = None,
+        max_tokens: int | None = None,
+        tools: list[dict] | None = None,
+        stop: list[str] | None = None,
+    ) -> LLMTurn:
+        """优先走原生 tools；接口不支持时退回纯文本。"""
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        client = self.client.with_options(timeout=timeout) if timeout else self.client
+        use_tools = bool(tools) and not self._tools_unsupported
+        if use_tools:
+            create_kwargs: dict = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": temperature,
+                "stream": False,
+                "tools": tools,
+                "tool_choice": "auto",
+            }
+            if max_tokens:
+                create_kwargs["max_tokens"] = max_tokens
+            try:
+                print(f"[LLM] 原生 function calling | {self.model}", flush=True)
+                response = client.chat.completions.create(**create_kwargs)
+                msg = response.choices[0].message if response.choices else None
+                turn = parse_assistant_message(msg)
+                if turn.tool_name:
+                    print(f"[LLM] tool_call: {turn.tool_name} {str(turn.tool_args)[:160]}", flush=True)
+                elif turn.content:
+                    preview = turn.content.replace("\n", " ")[:160]
+                    print(f"[LLM] 无 tool_call，收到文本: {preview}", flush=True)
+                return turn
+            except Exception as err:
+                if _is_tools_unsupported_error(err):
+                    print(f"[LLM] 接口不支持 tools，退回 JSON 协议 | {str(err)[:120]}", flush=True)
+                    self._tools_unsupported = True
+                else:
+                    raise
+        text = self.chat(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=temperature,
+            timeout=timeout,
+            max_tokens=max_tokens,
+            json_mode=True,
+            stop=stop,
+        )
+        return LLMTurn(content=text, used_native_tools=False)
 
     @staticmethod
     def _is_repetition_loop(text: str) -> bool:

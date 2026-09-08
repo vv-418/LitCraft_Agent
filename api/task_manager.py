@@ -27,7 +27,7 @@ if _project_root not in sys.path:
 import utils.logger  # noqa: F401
 
 from agent.langgraph_agent import LangGraphAgent
-from llm_client import LitCraftAgentsLLM
+from llm_client import LitCraftAgentsLLM, resolve_user_llm_kwargs
 from tools.registry import ToolRegistry
 from tools.search import (
     ArxivSearchTool,
@@ -59,9 +59,30 @@ def _build_agent(
     on_progress=None,
     papers_dir: str = "",
     figures_dir: str = "",
+    llm_model_id: str = "",
+    llm_api_key: str = "",
+    llm_base_url: str = "",
+    llm_timeout: int | None = None,
+    llm_source: str = "",
 ) -> LangGraphAgent:
     """创建 LLM、注册工具，并组装成一个 LangGraphAgent。"""
-    llm = LitCraftAgentsLLM()
+    override = resolve_user_llm_kwargs(
+        model=llm_model_id,
+        api_key=llm_api_key,
+        base_url=llm_base_url,
+        timeout=llm_timeout,
+        source=llm_source,
+    )
+    if override:
+        llm = LitCraftAgentsLLM(**override)
+        logger.info(
+            "使用用户配置的大模型 | model=%s | base_url=%s",
+            override.get("model"),
+            override.get("baseUrl"),
+        )
+    else:
+        llm = LitCraftAgentsLLM()
+        logger.info("使用默认本地大模型 | model=%s", llm.model)
 
     tools = ToolRegistry()
     per_source = max(1, min(int(per_source_limit or 10), 50))
@@ -144,6 +165,11 @@ class TaskManager:
         papers_filename: str = "",
         review_output_dir: str = "",
         review_filename: str = "",
+        llm_model_id: str = "",
+        llm_api_key: str = "",
+        llm_base_url: str = "",
+        llm_timeout: int | None = None,
+        llm_source: str = "",
     ) -> str:
         """在后台线程中启动一个 Agent 综述任务。
         
@@ -158,6 +184,10 @@ class TaskManager:
             papers_filename: 下载论文文件名前缀
             review_output_dir: 综述 PDF 保存目录
             review_filename: 综述 PDF 自定义文件名
+            llm_model_id: 用户覆盖的模型 ID（须与 key、base_url 同时填写）
+            llm_api_key: 用户覆盖的 API Key（不写入任务记录）
+            llm_base_url: 用户覆盖的接口地址
+            llm_timeout: 用户覆盖的超时秒数
         
         Returns:
             新任务的唯一 task_id（UUID 字符串）
@@ -169,6 +199,13 @@ class TaskManager:
         papers_dir = (papers_output_dir or "").strip()
         review_dir = (review_output_dir or "").strip()
         out_dir = (output_dir or "").strip()
+        llm_override = resolve_user_llm_kwargs(
+            model=llm_model_id,
+            api_key=llm_api_key,
+            base_url=llm_base_url,
+            timeout=llm_timeout,
+            source=llm_source,
+        )
 
         with self._lock:
             self._tasks[task_id] = {
@@ -197,10 +234,11 @@ class TaskManager:
 
         # 在线程池中异步执行
         logger.info(
-            "提交后台任务 | task_id=%s | topic=%.40s | year_from=%s | save_pdf=%s | per_source=%s | final=%s | papers_dir=%s | review_dir=%s",
+            "提交后台任务 | task_id=%s | topic=%.40s | year_from=%s | save_pdf=%s | per_source=%s | final=%s | papers_dir=%s | review_dir=%s | llm=%s",
             task_id, topic, year_from, save_pdf, per_source, final_n,
             papers_dir or out_dir or "default",
             review_dir or out_dir or "default",
+            f"{llm_override['model']}@{llm_override['baseUrl']}" if llm_override else "default",
         )
         self._executor.submit(
             self._run_task,
@@ -215,6 +253,11 @@ class TaskManager:
             (papers_filename or "").strip(),
             review_dir,
             (review_filename or "").strip(),
+            llm_model_id or "",
+            llm_api_key or "",
+            llm_base_url or "",
+            llm_timeout,
+            llm_source or "",
         )
         return task_id
 
@@ -232,6 +275,11 @@ class TaskManager:
         papers_filename: str = "",
         review_output_dir: str = "",
         review_filename: str = "",
+        llm_model_id: str = "",
+        llm_api_key: str = "",
+        llm_base_url: str = "",
+        llm_timeout: int | None = None,
+        llm_source: str = "",
     ) -> None:
         """后台执行 Agent 任务（在 ThreadPoolExecutor 的线程中运行）。
         
@@ -317,6 +365,11 @@ class TaskManager:
                 on_progress=_on_progress,
                 papers_dir=str(lit_source),
                 figures_dir=str(figures),
+                llm_model_id=llm_model_id,
+                llm_api_key=llm_api_key,
+                llm_base_url=llm_base_url,
+                llm_timeout=llm_timeout,
+                llm_source=llm_source,
             )
             result = agent.run(
                 topic,
@@ -334,6 +387,7 @@ class TaskManager:
                 return pdf_gen.run({
                     "text": result.final_answer,
                     "output_path": output_path,
+                    "topic": topic,
                 })
 
             saved = save_run_outputs(
@@ -433,6 +487,7 @@ class TaskManager:
         pdf_result = pdf_gen.run({
             "text": final_answer,
             "output_path": str(output_path),
+            "topic": topic,
         })
         if str(pdf_result).startswith("ERROR"):
             raise RuntimeError(pdf_result)

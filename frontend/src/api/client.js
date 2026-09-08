@@ -40,21 +40,37 @@ export function startTask({
   papers_filename = '',
   review_output_dir = '',
   review_filename = '',
+  llm_model_id = '',
+  llm_api_key = '',
+  llm_base_url = '',
+  llm_source = '',
 }) {
+  const body = {
+    topic,
+    year_from,
+    save_pdf,
+    per_source_limit,
+    final_limit,
+    output_dir,
+    papers_output_dir,
+    papers_filename,
+    review_output_dir,
+    review_filename,
+  }
+  if (llm_source === 'local') {
+    body.llm_source = 'local'
+    if (llm_model_id) body.llm_model_id = llm_model_id
+    if (llm_api_key) body.llm_api_key = llm_api_key
+    if (llm_base_url) body.llm_base_url = llm_base_url
+  } else if (llm_source === 'online' && llm_model_id && llm_api_key && llm_base_url) {
+    body.llm_source = 'online'
+    body.llm_model_id = llm_model_id
+    body.llm_api_key = llm_api_key
+    body.llm_base_url = llm_base_url
+  }
   return request('/api/agent/start', {
     method: 'POST',
-    body: JSON.stringify({
-      topic,
-      year_from,
-      save_pdf,
-      per_source_limit,
-      final_limit,
-      output_dir,
-      papers_output_dir,
-      papers_filename,
-      review_output_dir,
-      review_filename,
-    }),
+    body: JSON.stringify(body),
   })
 }
 
@@ -98,4 +114,8 @@ export function saveReviewPdf(taskId, { review_output_dir, review_filename = '' 
     method: 'POST',
     body: JSON.stringify({ review_output_dir, review_filename }),
   })
+}
+
+export function getLlmInfo() {
+  return request('/api/llm/info')
 }

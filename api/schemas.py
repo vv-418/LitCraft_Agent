@@ -51,6 +51,37 @@ class AgentStartRequest(BaseModel):
         le=50,
         description="多源合并去重后最终对外保留的论文篇数",
     )
+    llm_model_id: str = Field(
+        default="",
+        description="覆盖默认模型 ID；须与 llm_api_key、llm_base_url 同时填写才生效",
+    )
+    llm_api_key: str = Field(
+        default="",
+        description="覆盖默认 API Key；三项未填齐则仍用本地 .env 模型",
+    )
+    llm_base_url: str = Field(
+        default="",
+        description="覆盖默认 OpenAI 兼容接口地址，如 https://api.deepseek.com/v1",
+    )
+    llm_source: str = Field(
+        default="",
+        description="local：未填项用 .env 补齐；online：须三项同时填写",
+    )
+    llm_timeout: int | None = Field(
+        default=None,
+        ge=1,
+        le=600,
+        description="覆盖请求超时秒数；留空则用默认",
+    )
+
+
+class LlmInfoResponse(BaseModel):
+    """默认大模型的公开信息（不含密钥）。"""
+
+    model: str = Field(default="", description="当前 .env 中的默认模型 ID")
+    base_url: str = Field(default="", description="当前 .env 中的默认接口地址")
+    timeout: int = Field(default=60, description="当前默认超时秒数")
+    ready: bool = Field(default=False, description="默认三项是否已在服务器配齐")
 
 
 class TaskStatusResponse(BaseModel):

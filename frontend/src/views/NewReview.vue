@@ -1,9 +1,6 @@
 <template>
   <div>
     <h1 class="page-title">新建文献综述</h1>
-    <p class="page-desc">
-      输入研究主题，LitCraft Agent 将自动搜索论文、下载 PDF、解析全文并生成综述。
-    </p>
 
     <TaskForm v-if="!taskId" @started="onStarted" />
 
