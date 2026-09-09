@@ -74,7 +74,9 @@ def _measure_run(tool: MultiSourceSearchTool, query: str) -> float:
     try:
         asyncio.run(tool._async_run({
             "query": query,
-            "sources": ["arxiv", "semantic_scholar", "google_scholar"],
+            "limit": 5,
+            "per_source_limit": 5,
+            "sources": ["openalex", "crossref", "europe_pmc", "arxiv", "semantic_scholar"],
         }))
     except Exception:
         pass
@@ -97,7 +99,7 @@ def main():
     # 使用一个独立的工具实例（缓存已启用）
     tool_cached = MultiSourceSearchTool(
         max_results=10, use_cache=True, use_semantic_dedup=False,
-        cache_ttl=CACHE_TTL,
+        cache_ttl=CACHE_TTL, auto_download=False,
     )
     cache_clear_needed = True  # 标记是否需要清缓存
 
@@ -142,7 +144,7 @@ def main():
     print("\n  ── [2/3] 跨表述缓存（模拟 ReAct 循环变体） ──────")
     tool_variant = MultiSourceSearchTool(
         max_results=10, use_cache=True, use_semantic_dedup=False,
-        cache_ttl=CACHE_TTL,
+        cache_ttl=CACHE_TTL, auto_download=False,
     )
     tool_variant._get_cache().clear()
 
@@ -175,10 +177,12 @@ def main():
     # 先在没有语义去重的情况下跑一次
     tool_no_dedup = MultiSourceSearchTool(
         max_results=10, use_cache=False, use_semantic_dedup=False,
+        auto_download=False,
     )
     # 再开语义去重跑一次
     tool_with_dedup = MultiSourceSearchTool(
         max_results=10, use_cache=False, use_semantic_dedup=True,
+        auto_download=False,
     )
 
     dedup_stats = []
@@ -186,7 +190,9 @@ def main():
         # 获取语义去重前的原始论文列表（直接调用 _async_run 内部分析）
         result_str = asyncio.run(tool_no_dedup._async_run({
             "query": query,
-            "sources": ["arxiv", "semantic_scholar", "google_scholar"],
+            "limit": 5,
+            "per_source_limit": 5,
+            "sources": ["openalex", "crossref", "europe_pmc", "arxiv", "semantic_scholar"],
         }))
         data = json.loads(result_str)
         raw_count = data.get("total_count", 0)
@@ -195,7 +201,9 @@ def main():
         # 获取语义去重后的结果
         result_str2 = asyncio.run(tool_with_dedup._async_run({
             "query": query,
-            "sources": ["arxiv", "semantic_scholar", "google_scholar"],
+            "limit": 5,
+            "per_source_limit": 5,
+            "sources": ["openalex", "crossref", "europe_pmc", "arxiv", "semantic_scholar"],
         }))
         data2 = json.loads(result_str2)
         final_count = data2.get("total_count", 0)
@@ -256,13 +264,17 @@ def main():
             "queries": TEST_QUERIES,
             "cross_step_variants": {k: v for k, v in CROSS_STEP_VARIANTS.items()},
             "cache_ttl_seconds": CACHE_TTL,
+            "auto_download": False,
+            "sources": ["openalex", "crossref", "europe_pmc", "arxiv", "semantic_scholar"],
         },
         "cache_hit_rate": {
             "hit_rate_pct": round(hit_rate * 100, 1),
             "hits": total_hits,
             "misses": total_misses,
+            "api_call_reduction_pct": round(hit_rate * 100, 1),
             "avg_first_seconds": round(avg_first, 2),
             "avg_second_seconds": round(avg_second, 2),
+            "repeat_speedup_x": round(avg_first / avg_second, 2) if avg_second > 0 else None,
             "time_saved_seconds": round(time_saved, 2),
         },
         "cross_step_cache": {

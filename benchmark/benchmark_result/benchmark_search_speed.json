@@ -1,0 +1,46 @@
+{
+  "test_config": {
+    "num_queries": 3,
+    "runs_per_query": 1,
+    "queries": [
+      "transformer attention mechanism in NLP",
+      "deep reinforcement learning for robotics",
+      "graph neural network for molecular property prediction"
+    ],
+    "sources": [
+      "openalex",
+      "crossref",
+      "europe_pmc",
+      "arxiv",
+      "semantic_scholar"
+    ],
+    "auto_download": false
+  },
+  "results": [
+    {
+      "query": "transformer attention mechanism in NLP",
+      "serial_seconds": 47.7,
+      "concurrent_seconds": 33.22,
+      "speedup_x": 1.44
+    },
+    {
+      "query": "deep reinforcement learning for robotics",
+      "serial_seconds": 50.31,
+      "concurrent_seconds": 28.68,
+      "speedup_x": 1.75
+    },
+    {
+      "query": "graph neural network for molecular property prediction",
+      "serial_seconds": 39.72,
+      "concurrent_seconds": 28.22,
+      "speedup_x": 1.41
+    }
+  ],
+  "summary": {
+    "avg_serial_seconds": 45.91,
+    "avg_concurrent_seconds": 30.04,
+    "avg_speedup_x": 1.53,
+    "max_speedup_x": 1.75,
+    "min_speedup_x": 1.41
+  }
+}

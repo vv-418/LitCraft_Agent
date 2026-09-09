@@ -1,6 +1,7 @@
 # 向量库证据检索。
-# 默认：Dense 基线（评测上最优且快）。
-# 可选：RETRIEVAL_MODE=hybrid → Dense(+BM25)→RRF→Cross-Encoder 精排。
+# 默认：Dense 基线（快）。
+# 可选：RETRIEVAL_MODE=rerank → Dense 宽召回 + Cross-Encoder 精排（质量/延迟折中）。
+# 可选：RETRIEVAL_MODE=hybrid → Dense(+BM25)→RRF→精排（更慢，召回提升不稳定）。
 
 from __future__ import annotations
 
@@ -35,9 +36,9 @@ _ZH_STOP = {
 
 
 def _retrieval_mode() -> str:
-    """dense（默认）| hybrid。"""
+    """dense（默认）| rerank | hybrid。"""
     mode = (os.getenv("RETRIEVAL_MODE") or "dense").strip().lower()
-    return mode if mode in {"dense", "hybrid"} else "dense"
+    return mode if mode in {"dense", "rerank", "hybrid"} else "dense"
 
 
 def _tokenize(text: str) -> List[str]:
@@ -87,13 +88,14 @@ def _split_clauses(text: str, limit: int = 2) -> List[str]:
 
 
 class AdvancedRetrieval(Tool):
-    """默认 Dense 基线；RETRIEVAL_MODE=hybrid 时启用 RRF+重排。"""
+    """Dense 基线；rerank=宽召回+精排；hybrid=RRF+精排。"""
 
     name = "advanced_search"
     description = (
         "Retrieve evidence chunks from the vector store. "
-        "Default: dense baseline (fast, best measured recall). "
-        "Set RETRIEVAL_MODE=hybrid for dense+BM25 RRF + cross-encoder rerank."
+        "Default: dense baseline. "
+        "RETRIEVAL_MODE=rerank for dense pool + cross-encoder; "
+        "hybrid for dense+BM25 RRF + rerank."
     )
     input_schema = {
         "type": "object",
@@ -273,12 +275,13 @@ class AdvancedRetrieval(Tool):
         use_mmr: bool = False,
     ) -> Dict[str, Any]:
         mode = _retrieval_mode()
-        if mode == "dense":
-            return self._retrieve_dense(collection_name, query, top_k, topic_threshold)
-
-        return self._retrieve_hybrid(
-            collection_name, query, top_k, topic_threshold, use_mmr=use_mmr
-        )
+        if mode == "hybrid":
+            return self._retrieve_hybrid(
+                collection_name, query, top_k, topic_threshold, use_mmr=use_mmr
+            )
+        if mode == "rerank":
+            return self._retrieve_rerank(collection_name, query, top_k, topic_threshold)
+        return self._retrieve_dense(collection_name, query, top_k, topic_threshold)
 
     def _image_rank(
         self,
@@ -404,6 +407,106 @@ class AdvancedRetrieval(Tool):
             "strategy": "dense_baseline",
             "query": query,
             "queries": [query],
+            "results_count": len(chunks),
+            "chunks": chunks,
+        }
+
+    def _rerank_pool_size(self, top_k: int) -> int:
+        env = (os.getenv("RERANK_POOL") or "").strip()
+        try:
+            n = int(env) if env else 20
+        except ValueError:
+            n = 20
+        return max(top_k, min(n, 40))
+
+    def _retrieve_rerank(
+        self,
+        collection_name: str,
+        query: str,
+        top_k: int,
+        topic_threshold: float,
+    ) -> Dict[str, Any]:
+        """Dense 取 pool（默认 20）再 Cross-Encoder 截断到 top_k。不跑 BM25 / 多路查询。"""
+        pool = self._rerank_pool_size(top_k)
+        print("\n[SEARCH] Dense 宽召回 + Cross-Encoder 精排（RETRIEVAL_MODE=rerank）")
+        print(f"   主题: {query[:80]}")
+        print(f"   pool={pool} → keep {top_k}")
+
+        ranked, id_to_doc, sims = self._dense_rank(collection_name, query, pool)
+
+        img_m = max(2, top_k // 3)
+        mm_ranked, mm_docs, mm_sims = self._image_rank(collection_name, query, img_m)
+        for cid, doc in mm_docs.items():
+            id_to_doc[cid] = doc
+        for cid, s in mm_sims.items():
+            sims[cid] = max(sims.get(cid, 0.0), s)
+
+        candidates: List[str] = []
+        seen = set()
+        for cid in ranked + mm_ranked:
+            if cid in id_to_doc and cid not in seen:
+                seen.add(cid)
+                candidates.append(cid)
+            if len(candidates) >= pool:
+                break
+
+        if not candidates:
+            return {
+                "status": "success",
+                "strategy": "dense_rerank",
+                "query": query,
+                "queries": [query],
+                "results_count": 0,
+                "chunks": [],
+            }
+
+        rerank_query = query if len(query) <= 256 else query[:256]
+        passages = [(id_to_doc[c].get("content") or "") for c in candidates]
+        reranked = self.reranker.rerank(rerank_query, passages, top_k=len(candidates))
+        rerank_scores = {candidates[i]: score for i, score in reranked}
+        ordered = [candidates[i] for i, _ in reranked]
+
+        if topic_threshold > 0:
+            text_ids = [
+                c for c in ordered
+                if (id_to_doc[c].get("metadata") or {}).get("modality") != "image"
+            ]
+            topic_scores = self._topic_scores(
+                query, {c: id_to_doc[c] for c in text_ids}
+            )
+            kept = []
+            for c in ordered:
+                meta = id_to_doc[c].get("metadata") or {}
+                if meta.get("modality") == "image" or topic_scores.get(c, 0.0) >= topic_threshold:
+                    kept.append(c)
+            if not kept:
+                kept = ordered
+            for c in ordered:
+                if c not in topic_scores:
+                    topic_scores[c] = sims.get(c, 0.0)
+        else:
+            topic_scores = {c: sims.get(c, 0.0) for c in ordered}
+            kept = ordered
+
+        selected = kept[:top_k]
+        chunks = []
+        for cid in selected:
+            meta = id_to_doc[cid].get("metadata") or {}
+            chunks.append({
+                "chunk_id": cid,
+                "rerank_score": round(rerank_scores.get(cid, 0.0), 6),
+                "topic_relevance": round(topic_scores.get(cid, 0.0), 4),
+                "similarity": round(sims.get(cid, 0.0), 4),
+                "content": id_to_doc[cid].get("content"),
+                "metadata": meta,
+                "modality": meta.get("modality", "text"),
+            })
+        return {
+            "status": "success",
+            "strategy": "dense_rerank",
+            "query": query,
+            "queries": [query],
+            "reranker": self.reranker.model_path if self.reranker.available else None,
             "results_count": len(chunks),
             "chunks": chunks,
         }

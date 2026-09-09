@@ -76,11 +76,12 @@ def test_text_optimization():
     bilingual = sum(1 for r in results if len(r["bilingual_candidates"]) > 1)
     avg_orig_len = sum(len(r["original"]) for r in results) / total
     avg_opt_len = sum(len(r["optimized"]) for r in results) / total
+    length_reduction_pct = (avg_orig_len - avg_opt_len) / avg_orig_len * 100 if avg_orig_len else 0
 
     print(f"\n    📊 优化率: {modified}/{total} ({modified/total:.0%})")
     print(f"    📊 双语生成: {bilingual} 个中文查询")
     print(f"    📊 平均长度: {avg_orig_len:.0f} → {avg_opt_len:.0f} 字符")
-    print(f"    📊 平均压缩率: {avg_opt_len/avg_orig_len:.0%}")
+    print(f"    📊 平均缩短: {length_reduction_pct:.1f}%")
 
     return {
         "total": total,
@@ -88,6 +89,7 @@ def test_text_optimization():
         "bilingual": bilingual,
         "avg_orig_len": round(avg_orig_len, 1),
         "avg_opt_len": round(avg_opt_len, 1),
+        "length_reduction_pct": round(length_reduction_pct, 1),
     }
 
 
@@ -104,12 +106,14 @@ def test_zero_result_rescue():
         use_cache=False,
         use_semantic_dedup=False,
         use_query_optimizer=False,
+        auto_download=False,
     )
     tool_with_opt = MultiSourceSearchTool(
         max_results=10,
         use_cache=False,
         use_semantic_dedup=False,
         use_query_optimizer=True,
+        auto_download=False,
     )
 
     records = []
@@ -120,7 +124,9 @@ def test_zero_result_rescue():
         start = time.perf_counter()
         result_str_no = asyncio.run(tool_no_opt._async_run({
             "query": query,
-            "sources": ["arxiv", "semantic_scholar", "google_scholar"],
+            "limit": 5,
+            "per_source_limit": 5,
+            "sources": ["openalex", "crossref", "europe_pmc", "arxiv", "semantic_scholar"],
         }))
         elapsed_no = time.perf_counter() - start
         data_no = json.loads(result_str_no)
@@ -134,7 +140,9 @@ def test_zero_result_rescue():
         start = time.perf_counter()
         result_str_yes = asyncio.run(tool_with_opt._async_run({
             "query": query,
-            "sources": ["arxiv", "semantic_scholar", "google_scholar"],
+            "limit": 5,
+            "per_source_limit": 5,
+            "sources": ["openalex", "crossref", "europe_pmc", "arxiv", "semantic_scholar"],
         }))
         elapsed_yes = time.perf_counter() - start
         data_yes = json.loads(result_str_yes)
@@ -163,9 +171,14 @@ def test_zero_result_rescue():
     total_papers_yes = sum(r["with_opt_count"] for r in records)
     avg_time_no = sum(r["without_opt_time"] for r in records) / total_q
     avg_time_yes = sum(r["with_opt_time"] for r in records) / total_q
+    paper_coverage_ratio = (
+        round(total_papers_yes / total_papers_no, 2) if total_papers_no > 0 else None
+    )
 
     print(f"\n    📊 零结果次数: {empty_no} → {empty_yes} (挽救 {rescued} 次)")
     print(f"    📊 论文总数: {total_papers_no} → {total_papers_yes}")
+    if paper_coverage_ratio is not None:
+        print(f"    📊 文献覆盖比: {paper_coverage_ratio}x")
     print(f"    📊 平均耗时: {avg_time_no:.1f}s → {avg_time_yes:.1f}s")
 
     return {
@@ -175,6 +188,7 @@ def test_zero_result_rescue():
         "rescued": rescued,
         "total_papers_without": total_papers_no,
         "total_papers_with": total_papers_yes,
+        "paper_coverage_ratio": paper_coverage_ratio,
         "avg_time_without": round(avg_time_no, 2),
         "avg_time_with": round(avg_time_yes, 2),
     }
@@ -239,6 +253,7 @@ def main():
             "bilingual_generated": txt_stats["bilingual"],
             "avg_orig_len": txt_stats["avg_orig_len"],
             "avg_opt_len": txt_stats["avg_opt_len"],
+            "length_reduction_pct": txt_stats["length_reduction_pct"],
         },
         "zero_result_rescue": rescue_stats,
     }

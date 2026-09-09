@@ -41,41 +41,54 @@ TEST_QUERIES = [
     "graph neural network for molecular property prediction",
 ]
 
+# 跳过 Google Scholar（爬虫不稳定，会主导耗时）。对比官方 API 五源。
+SOURCES = ["openalex", "crossref", "europe_pmc", "arxiv", "semantic_scholar"]
+TOOL_KW = dict(
+    max_results=10,
+    auto_download=False,
+    use_cache=False,
+    use_semantic_dedup=False,
+    use_query_optimizer=False,
+)
+
 # 重复次数（取最短的多次测量以消除冷启动/网络波动的影响）
 RUNS_PER_QUERY = 1
 
 
+def _new_tool() -> MultiSourceSearchTool:
+    return MultiSourceSearchTool(**TOOL_KW)
+
+
 def _measure_serial(tool: MultiSourceSearchTool, query: str) -> float:
-    """测量串行执行时间：逐个调用三个底层工具的 run()。"""
+    """测量串行执行时间：五源逐个 run()。"""
     start = time.perf_counter()
-
-    try:
-        tool.arxiv_tool.run({"query": query, "limit": 5})
-    except Exception:
-        pass  # 单源失败不影响计时
-
-    try:
-        tool.semantic_tool.run({"query": query, "limit": 5})
-    except Exception:
-        pass
-
-    try:
-        tool.google_tool.run({"query": query, "limit": 5})
-    except Exception:
-        pass
-
+    payload = {"query": query, "limit": 5}
+    for src_tool in (
+        tool.openalex_tool,
+        tool.crossref_tool,
+        tool.europe_pmc_tool,
+        tool.arxiv_tool,
+        tool.semantic_tool,
+    ):
+        try:
+            src_tool.run(payload)
+        except Exception:
+            pass
     return time.perf_counter() - start
 
 
 def _measure_concurrent(tool: MultiSourceSearchTool, query: str) -> float:
     """测量异步并发执行时间。"""
     start = time.perf_counter()
-
     try:
-        asyncio.run(tool._async_run({"query": query, "sources": ["arxiv", "semantic_scholar", "google_scholar"]}))
+        asyncio.run(tool._async_run({
+            "query": query,
+            "limit": 5,
+            "per_source_limit": 5,
+            "sources": SOURCES,
+        }))
     except Exception:
         pass
-
     return time.perf_counter() - start
 
 
@@ -104,14 +117,14 @@ def main():
         # 每个测量使用独立的工具实例，避免 rate-limit 状态污染
         serial_times = []
         for r in range(RUNS_PER_QUERY):
-            tool_ser = MultiSourceSearchTool(max_results=10)
+            tool_ser = _new_tool()
             t = _measure_serial(tool_ser, query)
             serial_times.append(t)
             print(f"     串行 #{r + 1}: {_fmt(t)}s")
 
         concurrent_times = []
         for r in range(RUNS_PER_QUERY):
-            tool_con = MultiSourceSearchTool(max_results=10)
+            tool_con = _new_tool()
             t = _measure_concurrent(tool_con, query)
             concurrent_times.append(t)
             print(f"     并发 #{r + 1}: {_fmt(t)}s")
@@ -171,6 +184,8 @@ def main():
             "num_queries": len(TEST_QUERIES),
             "runs_per_query": RUNS_PER_QUERY,
             "queries": TEST_QUERIES,
+            "sources": SOURCES,
+            "auto_download": False,
         },
         "results": [
             {

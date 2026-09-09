@@ -1,0 +1,56 @@
+{
+  "test_config": {
+    "queries": [
+      "transformer attention mechanism in NLP",
+      "graph neural network for molecular property prediction"
+    ],
+    "cross_step_variants": {
+      "transformer attention mechanism in NLP": [
+        "transformer attention mechanism in NLP",
+        "self-attention mechanism in transformers",
+        "attention is all you need transformer"
+      ]
+    },
+    "cache_ttl_seconds": 3600,
+    "auto_download": false,
+    "sources": [
+      "openalex",
+      "crossref",
+      "europe_pmc",
+      "arxiv",
+      "semantic_scholar"
+    ]
+  },
+  "cache_hit_rate": {
+    "hit_rate_pct": 30.0,
+    "hits": 6,
+    "misses": 14,
+    "api_call_reduction_pct": 30.0,
+    "avg_first_seconds": 31.21,
+    "avg_second_seconds": 24.43,
+    "repeat_speedup_x": 1.28,
+    "time_saved_seconds": 6.77
+  },
+  "cross_step_cache": {
+    "hit_rate_pct": 0.0,
+    "hits": 0,
+    "total": 3
+  },
+  "semantic_dedup": {
+    "total_extra_removed": 3,
+    "details": [
+      {
+        "query": "transformer attention mechanism in NLP",
+        "raw_after_md5": 5,
+        "after_semantic": 5,
+        "extra_removed": 0
+      },
+      {
+        "query": "graph neural network for molecular property predic",
+        "raw_after_md5": 5,
+        "after_semantic": 5,
+        "extra_removed": 3
+      }
+    ]
+  }
+}

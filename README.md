@@ -552,9 +552,10 @@ class AdvancedRetrieval
 ```
 
 - Dense 基线（默认，`RETRIEVAL_MODE=dense`）：文本 Top-K + 可选 CLIP 图像 Top-M，**加权 RRF**（文本权重大于图像）
-- 可选 hybrid：Dense(+BM25)→RRF→`bge-reranker-v2-m3`，同样挂上图像辅路
+- 可选 rerank：Dense 先取 pool（默认 20）→ `bge-reranker-v2-m3` 精排到 Top-K
+- 可选 hybrid：Dense(+BM25)→RRF→同一 reranker（更慢，召回提升不稳定）
 - 图像命中带 `modality=image` 与可读 path，供综述引用「见图」
-- 配置：`RERANKER_MODEL`、`RERANK_TOP_N`（仅 hybrid）；`MULTIMODAL_*`（图文）
+- 配置：`RERANKER_MODEL`、`RERANK_POOL`（rerank）；`RERANK_TOP_N`（hybrid）；`MULTIMODAL_*`（图文）
 
 ### api/server.py
 
@@ -683,7 +684,7 @@ agent.run(topic) 进入 ReAct 循环
 | `LLM_BASE_URL` | ✅ | OpenAI 兼容地址（Ollama 一般为 `http://localhost:11434/v1`） |
 | `LLM_TIMEOUT` | ❌ | 请求超时秒数（默认见 `.env.example`） |
 | `LLM_NATIVE_TOOLS` | ❌ | 原生 function calling，默认开 |
-| `RETRIEVAL_MODE` | ❌ | `dense`（默认）或 `hybrid` |
+| `RETRIEVAL_MODE` | ❌ | `dense`（默认）、`rerank` 或 `hybrid` |
 | `MULTIMODAL_ENABLED` | ❌ | CLIP 插图，默认开；模型缺失则跳过 |
 | `SEMANTIC_SCHOLAR_API_KEY` | ❌ | Semantic Scholar 请求头 |
 | `GOOGLE_SCHOLAR_PROXY` | ❌ | Google Scholar 代理 |

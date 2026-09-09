@@ -1,9 +1,9 @@
 """
-SciFact 向量检索召回率评测。
+SciFact 向量检索召回率评测（同一 embedding：bge-m3）。
 
-对比：
-  - traditional：纯 Dense（Chroma + MiniLM）
-  - advanced：当前项目默认策略（多查询 Dense+BM25+RRF+主题门槛+MMR）
+对比检索策略：
+  - dense：AdvancedRetrieval 默认 Dense Top-K
+  - hybrid：Dense+BM25 → RRF → bge-reranker-v2-m3
 
 数据目录：datasets/scifact/
 结果输出：benchmark/benchmark_result/benchmark_recall.json
@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from collections import defaultdict
@@ -135,41 +136,32 @@ def extract_doc_ids(raw: dict) -> list[str]:
     return ids
 
 
-def run_strategies(vs: VectorStoreTool, ar: AdvancedRetrieval, query: str, top_k: int) -> dict:
+STRATEGIES = ("dense", "rerank")
+
+
+def run_strategies(ar: AdvancedRetrieval, query: str, top_k: int) -> dict:
+    """同一工具、同一索引，对比 dense / rerank。"""
     out = {}
-
-    # 1) 传统 Dense
-    t0 = time.perf_counter()
-    try:
-        raw = json.loads(vs._search(COLLECTION, query, top_k=top_k, threshold=0.0))
-        ids = extract_doc_ids(raw)
-    except Exception as e:
-        print(f"  [WARN] traditional 失败: {e}")
-        ids = []
-    out["traditional"] = {
-        "ids": ids,
-        "time": round(time.perf_counter() - t0, 3),
-    }
-
-    # 2) 当前 advanced_search
-    t0 = time.perf_counter()
-    try:
-        raw = json.loads(
-            ar.run({
-                "collection_name": COLLECTION,
-                "query": query,
-                "top_k": top_k,
-                "threshold": 0.0,  # 评测时放宽主题门槛，避免把 gold 误杀
-            })
-        )
-        ids = extract_doc_ids(raw)
-    except Exception as e:
-        print(f"  [WARN] advanced 失败: {e}")
-        ids = []
-    out["advanced"] = {
-        "ids": ids,
-        "time": round(time.perf_counter() - t0, 3),
-    }
+    for mode in STRATEGIES:
+        os.environ["RETRIEVAL_MODE"] = mode
+        t0 = time.perf_counter()
+        try:
+            raw = json.loads(
+                ar.run({
+                    "collection_name": COLLECTION,
+                    "query": query,
+                    "top_k": top_k,
+                    "threshold": 0.0,
+                })
+            )
+            ids = extract_doc_ids(raw)
+        except Exception as e:
+            print(f"  [WARN] {mode} 失败: {e}")
+            ids = []
+        out[mode] = {
+            "ids": ids,
+            "time": round(time.perf_counter() - t0, 3),
+        }
     return out
 
 
@@ -189,8 +181,8 @@ def main():
         )
 
     print("=" * 72)
-    print("  SciFact 向量检索召回率评测")
-    print("  traditional (Dense)  vs  advanced (Dense+BM25+RRF+MMR)")
+    print("  SciFact 向量检索召回率评测（bge-m3）")
+    print("  dense  vs  rerank（Dense pool + Cross-Encoder）")
     print("=" * 72)
 
     qrels = load_qrels(qrels_path)
@@ -211,7 +203,7 @@ def main():
         query = queries[qid]
         gold = qrels[qid]
         print(f"\n[{i}/{len(eval_qids)}] qid={qid} | gold={len(gold)} | {query[:70]}")
-        strat = run_strategies(vs, ar, query, args.top_k)
+        strat = run_strategies(ar, query, args.top_k)
 
         row = {
             "query_id": qid,
@@ -242,25 +234,26 @@ def main():
         "split": args.split,
         "num_queries": len(rows),
         "collection": COLLECTION,
-        "traditional_recall@5": avg("traditional_recall@5"),
-        "traditional_recall@10": avg("traditional_recall@10"),
-        "traditional_time_avg": avg("traditional_time"),
-        "advanced_recall@5": avg("advanced_recall@5"),
-        "advanced_recall@10": avg("advanced_recall@10"),
-        "advanced_time_avg": avg("advanced_time"),
+        "embedding": "bge-m3",
+        "dense_recall@5": avg("dense_recall@5"),
+        "dense_recall@10": avg("dense_recall@10"),
+        "dense_time_avg": avg("dense_time"),
+        "rerank_recall@5": avg("rerank_recall@5"),
+        "rerank_recall@10": avg("rerank_recall@10"),
+        "rerank_time_avg": avg("rerank_time"),
     }
 
     print("\n" + "=" * 72)
     print("  汇总")
     print(
-        f"  traditional  R@5={summary['traditional_recall@5']:.4f}  "
-        f"R@10={summary['traditional_recall@10']:.4f}  "
-        f"t={summary['traditional_time_avg']:.2f}s"
+        f"  dense    R@5={summary['dense_recall@5']:.4f}  "
+        f"R@10={summary['dense_recall@10']:.4f}  "
+        f"t={summary['dense_time_avg']:.2f}s"
     )
     print(
-        f"  advanced     R@5={summary['advanced_recall@5']:.4f}  "
-        f"R@10={summary['advanced_recall@10']:.4f}  "
-        f"t={summary['advanced_time_avg']:.2f}s"
+        f"  rerank   R@5={summary['rerank_recall@5']:.4f}  "
+        f"R@10={summary['rerank_recall@10']:.4f}  "
+        f"t={summary['rerank_time_avg']:.2f}s"
     )
 
     out_path = result_path("benchmark_recall.json")

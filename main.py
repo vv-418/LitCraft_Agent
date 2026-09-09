@@ -66,7 +66,7 @@ def build_agent(papers_dir: str = "", figures_dir: str = "") -> LangGraphAgent:
     vector_store = VectorStoreTool(db_path="./storage/chroma", local_model_cache="./models")
     tools.register(vector_store)
     
-    # 第6步：证据检索（默认 Dense 基线；.env 设 RETRIEVAL_MODE=hybrid 可开重排）
+    # 第6步：证据检索（默认 Dense；.env 可设 RETRIEVAL_MODE=rerank / hybrid）
     tools.register(AdvancedRetrieval(
         vector_store=vector_store,
         llm=llm,

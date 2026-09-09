@@ -121,7 +121,7 @@ def _build_agent(
     vector_store = VectorStoreTool(db_path="./storage/chroma", local_model_cache="./models")
     tools.register(vector_store)
 
-    # 第6步：证据检索（默认 Dense；RETRIEVAL_MODE=hybrid 开 RRF+重排）
+    # 第6步：证据检索（默认 Dense；RETRIEVAL_MODE=rerank / hybrid）
     tools.register(AdvancedRetrieval(
         vector_store=vector_store,
         llm=llm,

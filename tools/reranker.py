@@ -10,19 +10,29 @@ from typing import List, Optional, Sequence, Tuple
 _DEFAULT_MODEL = "./models/bge-reranker-v2-m3"
 
 
+def _auto_device() -> str:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
 class Reranker:
     """懒加载 CrossEncoder；失败时 degrade 为按原序返回。"""
 
     def __init__(
         self,
         model_path: str = "",
-        device: str = "cpu",
+        device: str = "",
         max_length: int = 512,
     ):
         self.model_path = (
             (model_path or os.getenv("RERANKER_MODEL") or _DEFAULT_MODEL).strip()
         )
-        self.device = device
+        self.device = (device or os.getenv("RERANKER_DEVICE") or "").strip() or _auto_device()
         self.max_length = max_length
         self._model = None
         self._load_error: Optional[str] = None

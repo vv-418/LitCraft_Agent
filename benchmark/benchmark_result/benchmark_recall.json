@@ -4,12 +4,13 @@
     "split": "test",
     "num_queries": 20,
     "collection": "scifact_beir",
-    "traditional_recall@5": 0.825,
-    "traditional_recall@10": 0.85,
-    "traditional_time_avg": 0.0142,
-    "advanced_recall@5": 0.825,
-    "advanced_recall@10": 0.85,
-    "advanced_time_avg": 1.1683
+    "embedding": "bge-m3",
+    "dense_recall@5": 0.65,
+    "dense_recall@10": 0.8,
+    "dense_time_avg": 0.1765,
+    "rerank_recall@5": 0.725,
+    "rerank_recall@10": 0.725,
+    "rerank_time_avg": 3.4466
   },
   "rows": [
     {
@@ -19,38 +20,38 @@
       "gold_ids": [
         "31715818"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
-        "29638116",
-        "4346436",
-        "3874000",
-        "10786948",
-        "31715818",
-        "17388232",
+      "dense_retrieved": 10,
+      "dense_ids": [
+        "20101846",
+        "35008773",
         "86129154",
-        "927561",
-        "19855358",
-        "1769799"
+        "2121272",
+        "14719322",
+        "4405194",
+        "82665667",
+        "21456232",
+        "28386343",
+        "31293581"
       ],
-      "traditional_recall@5": 1.0,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.014,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
-        "4346436",
-        "803312",
-        "25404036",
-        "31715818",
-        "29638116",
-        "6863070",
-        "10786948",
-        "1769799",
-        "121581019",
-        "3874000"
+      "dense_recall@5": 0.0,
+      "dense_recall@10": 0.0,
+      "dense_time": 0.741,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
+        "4405194",
+        "86129154",
+        "8185080",
+        "21456232",
+        "35008773",
+        "28386343",
+        "14082855",
+        "2121272",
+        "1944452",
+        "9599194"
       ],
-      "advanced_recall@5": 1.0,
-      "advanced_recall@10": 1.0,
-      "advanced_time": 2.109
+      "rerank_recall@5": 0.0,
+      "rerank_recall@10": 0.0,
+      "rerank_time": 4.632
     },
     {
       "query_id": "3",
@@ -59,38 +60,38 @@
       "gold_ids": [
         "14717500"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
+      "dense_retrieved": 10,
+      "dense_ids": [
+        "1388704",
         "2739854",
+        "4378885",
+        "19058822",
+        "14717500",
         "23389795",
-        "14717500",
-        "19058822",
-        "15153602",
-        "13914198",
         "4632921",
-        "32181055",
-        "13519661",
-        "1388704"
+        "4391817",
+        "13914198",
+        "20375264"
       ],
-      "traditional_recall@5": 1.0,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.014,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
-        "14717500",
-        "4414547",
-        "19058822",
+      "dense_recall@5": 1.0,
+      "dense_recall@10": 1.0,
+      "dense_time": 0.162,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
         "2739854",
-        "4632921",
+        "14717500",
+        "1388704",
         "23389795",
-        "13914198",
-        "13916484",
-        "32181055",
-        "25536577"
+        "4632921",
+        "20375264",
+        "36713289",
+        "19058822",
+        "4378885",
+        "4391817"
       ],
-      "advanced_recall@5": 1.0,
-      "advanced_recall@10": 1.0,
-      "advanced_time": 0.998
+      "rerank_recall@5": 1.0,
+      "rerank_recall@10": 1.0,
+      "rerank_time": 3.267
     },
     {
       "query_id": "5",
@@ -99,38 +100,38 @@
       "gold_ids": [
         "13734012"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
-        "3413083",
+      "dense_retrieved": 10,
+      "dense_ids": [
         "13734012",
-        "13791044",
-        "21186109",
-        "5372432",
-        "22194407",
-        "27063470",
-        "8670178",
-        "18617259",
-        "9764256"
-      ],
-      "traditional_recall@5": 1.0,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.013,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
-        "13734012",
-        "841371",
+        "29745822",
+        "28738741",
+        "31460499",
         "42291761",
-        "3413083",
-        "5372432",
-        "15663829",
-        "3580005",
-        "8670178",
-        "18617259",
-        "13791044"
+        "23124332",
+        "38784540",
+        "103007",
+        "6421734",
+        "7751726"
       ],
-      "advanced_recall@5": 1.0,
-      "advanced_recall@10": 1.0,
-      "advanced_time": 1.209
+      "dense_recall@5": 1.0,
+      "dense_recall@10": 1.0,
+      "dense_time": 0.127,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
+        "18617259",
+        "23124332",
+        "13734012",
+        "24512064",
+        "27063470",
+        "28738741",
+        "6710713",
+        "44660616",
+        "32462603",
+        "38784540"
+      ],
+      "rerank_recall@5": 1.0,
+      "rerank_recall@10": 1.0,
+      "rerank_time": 3.124
     },
     {
       "query_id": "13",
@@ -139,38 +140,38 @@
       "gold_ids": [
         "1606628"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
-        "7662395",
-        "4791384",
-        "1263446",
+      "dense_retrieved": 10,
+      "dense_ids": [
         "11748341",
-        "8529693",
-        "23557241",
-        "8842332",
-        "17450673",
-        "27123743",
-        "26611834"
-      ],
-      "traditional_recall@5": 0.0,
-      "traditional_recall@10": 0.0,
-      "traditional_time": 0.012,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
+        "4791384",
         "7662395",
-        "26611834",
         "1263446",
         "8529693",
-        "8842332",
+        "31942055",
+        "1606628",
+        "9167230",
         "17450673",
-        "25182647",
-        "2425364",
-        "30786800",
-        "103007"
+        "2613775"
       ],
-      "advanced_recall@5": 0.0,
-      "advanced_recall@10": 0.0,
-      "advanced_time": 0.835
+      "dense_recall@5": 0.0,
+      "dense_recall@10": 1.0,
+      "dense_time": 0.127,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
+        "17450673",
+        "9513785",
+        "7662395",
+        "31942055",
+        "11748341",
+        "5487448",
+        "27123743",
+        "4791384",
+        "195689316",
+        "8529693"
+      ],
+      "rerank_recall@5": 0.0,
+      "rerank_recall@10": 0.0,
+      "rerank_time": 2.903
     },
     {
       "query_id": "36",
@@ -180,38 +181,38 @@
         "11705328",
         "5152028"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
-        "33409100",
+      "dense_retrieved": 10,
+      "dense_ids": [
         "3215494",
-        "11705328",
-        "18557974",
         "16252863",
-        "42441846",
-        "21636085",
-        "37424881",
-        "5152028",
-        "10557471"
-      ],
-      "traditional_recall@5": 0.5,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.012,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
-        "18557974",
+        "25439264",
         "33409100",
-        "23267371",
-        "37424881",
-        "16252863",
-        "21636085",
-        "42441846",
-        "3215494",
+        "18557974",
         "11705328",
-        "24049225"
+        "18256197",
+        "37424881",
+        "21636085",
+        "12810152"
       ],
-      "advanced_recall@5": 0.0,
-      "advanced_recall@10": 0.5,
-      "advanced_time": 0.782
+      "dense_recall@5": 0.0,
+      "dense_recall@10": 0.5,
+      "dense_time": 0.147,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
+        "37424881",
+        "33409100",
+        "21636085",
+        "11705328",
+        "16252863",
+        "18557974",
+        "12130200",
+        "9813098",
+        "18256197",
+        "12810152"
+      ],
+      "rerank_recall@5": 0.5,
+      "rerank_recall@10": 0.5,
+      "rerank_time": 3.191
     },
     {
       "query_id": "42",
@@ -220,38 +221,38 @@
       "gold_ids": [
         "18174210"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
-        "40913091",
+      "dense_retrieved": 10,
+      "dense_ids": [
         "18174210",
         "27889071",
-        "45218443",
-        "4449524",
-        "27162821",
-        "10128893",
-        "6315132",
-        "22482024",
-        "21636085"
+        "40913091",
+        "18344910",
+        "18256197",
+        "8385277",
+        "3215494",
+        "13959707",
+        "1145473",
+        "24144677"
       ],
-      "traditional_recall@5": 1.0,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.017,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
+      "dense_recall@5": 1.0,
+      "dense_recall@10": 1.0,
+      "dense_time": 0.158,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
         "18174210",
         "40913091",
-        "10128893",
         "27889071",
-        "6315132",
-        "4449524",
+        "9254550",
         "45218443",
-        "22482024",
-        "42441846",
-        "8385277"
+        "8317408",
+        "56893404",
+        "23013317",
+        "8385277",
+        "18256197"
       ],
-      "advanced_recall@5": 1.0,
-      "advanced_recall@10": 1.0,
-      "advanced_time": 1.207
+      "rerank_recall@5": 1.0,
+      "rerank_recall@10": 1.0,
+      "rerank_time": 3.961
     },
     {
       "query_id": "48",
@@ -260,38 +261,38 @@
       "gold_ids": [
         "13734012"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
-        "18617259",
+      "dense_retrieved": 10,
+      "dense_ids": [
         "11349166",
-        "24512064",
-        "5850219",
-        "44672703",
         "29955650",
-        "21644993",
-        "43587663",
-        "13322804",
-        "27063470"
-      ],
-      "traditional_recall@5": 0.0,
-      "traditional_recall@10": 0.0,
-      "traditional_time": 0.017,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
-        "11349166",
-        "24512064",
-        "21644993",
-        "44672703",
-        "13322804",
-        "5850219",
-        "19661996",
         "18617259",
-        "31560225",
-        "46355579"
+        "23203102",
+        "27063470",
+        "44624045",
+        "5835149",
+        "1358909",
+        "24512064",
+        "28738741"
       ],
-      "advanced_recall@5": 0.0,
-      "advanced_recall@10": 0.0,
-      "advanced_time": 1.446
+      "dense_recall@5": 0.0,
+      "dense_recall@10": 0.0,
+      "dense_time": 0.151,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
+        "27063470",
+        "11349166",
+        "29955650",
+        "18617259",
+        "23203102",
+        "44672703",
+        "3413083",
+        "5835149",
+        "23531592",
+        "7813993"
+      ],
+      "rerank_recall@5": 0.0,
+      "rerank_recall@10": 0.0,
+      "rerank_time": 3.43
     },
     {
       "query_id": "49",
@@ -300,38 +301,38 @@
       "gold_ids": [
         "5953485"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
+      "dense_retrieved": 10,
+      "dense_ids": [
         "5953485",
+        "5702790",
+        "7029990",
+        "12652963",
+        "10207180",
+        "10423989",
         "23913146",
-        "5702790",
-        "8006440",
-        "2619579",
-        "1333643",
-        "42662816",
-        "15590539",
-        "7029990",
-        "12871002"
+        "5273056",
+        "950306",
+        "18467982"
       ],
-      "traditional_recall@5": 1.0,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.013,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
+      "dense_recall@5": 1.0,
+      "dense_recall@10": 1.0,
+      "dense_time": 0.13,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
         "5953485",
-        "13964633",
         "5702790",
-        "15590539",
-        "1333643",
-        "8006440",
-        "22362025",
+        "12652963",
+        "10423989",
         "7029990",
-        "5253987",
-        "17544977"
+        "23913146",
+        "950306",
+        "5409325",
+        "18467982",
+        "435529"
       ],
-      "advanced_recall@5": 1.0,
-      "advanced_recall@10": 1.0,
-      "advanced_time": 1.031
+      "rerank_recall@5": 1.0,
+      "rerank_recall@10": 1.0,
+      "rerank_time": 3.549
     },
     {
       "query_id": "50",
@@ -340,38 +341,38 @@
       "gold_ids": [
         "12580014"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
+      "dense_retrieved": 10,
+      "dense_ids": [
         "12580014",
-        "39559521",
         "25738896",
-        "12489130",
-        "4561402",
-        "29785642",
-        "19736671",
+        "18488986",
         "13989491",
-        "15707049",
-        "17844478"
-      ],
-      "traditional_recall@5": 1.0,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.014,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
-        "12580014",
         "39559521",
-        "19736671",
-        "25738896",
-        "29785642",
-        "38037690",
-        "43014661",
-        "25853741",
-        "17844478",
-        "4561402"
+        "15405204",
+        "20839751",
+        "4561402",
+        "31933981",
+        "42731834"
       ],
-      "advanced_recall@5": 1.0,
-      "advanced_recall@10": 1.0,
-      "advanced_time": 1.262
+      "dense_recall@5": 1.0,
+      "dense_recall@10": 1.0,
+      "dense_time": 0.126,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
+        "12580014",
+        "25738896",
+        "18488986",
+        "42731834",
+        "13989491",
+        "39559521",
+        "4561402",
+        "8354687",
+        "29785642",
+        "15405204"
+      ],
+      "rerank_recall@5": 1.0,
+      "rerank_recall@10": 1.0,
+      "rerank_time": 2.843
     },
     {
       "query_id": "51",
@@ -380,38 +381,38 @@
       "gold_ids": [
         "45638119"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
+      "dense_retrieved": 10,
+      "dense_ids": [
         "45638119",
+        "8963413",
+        "20839751",
+        "24341590",
         "32001951",
-        "17648235",
-        "29366489",
-        "43385013",
-        "16086778",
-        "1866911",
-        "2014909",
-        "1554348",
-        "7821634"
+        "9239963",
+        "16734530",
+        "52180874",
+        "16098747",
+        "2931832"
       ],
-      "traditional_recall@5": 1.0,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.012,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
+      "dense_recall@5": 1.0,
+      "dense_recall@10": 1.0,
+      "dense_time": 0.129,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
         "45638119",
-        "2140497",
-        "3285322",
-        "17648235",
-        "15721252",
-        "21439640",
-        "4429932",
-        "7821634",
-        "13007205",
-        "32001951"
+        "8963413",
+        "24341590",
+        "27240667",
+        "32001951",
+        "16734530",
+        "20839751",
+        "2931832",
+        "32721137",
+        "2130391"
       ],
-      "advanced_recall@5": 1.0,
-      "advanced_recall@10": 1.0,
-      "advanced_time": 0.971
+      "rerank_recall@5": 1.0,
+      "rerank_recall@10": 1.0,
+      "rerank_time": 2.977
     },
     {
       "query_id": "53",
@@ -420,38 +421,38 @@
       "gold_ids": [
         "45638119"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
+      "dense_retrieved": 10,
+      "dense_ids": [
         "45638119",
-        "32001951",
-        "17648235",
-        "29366489",
-        "7821634",
-        "16086778",
-        "43385013",
-        "2014909",
-        "1554348",
-        "1866911"
-      ],
-      "traditional_recall@5": 1.0,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.012,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
-        "45638119",
-        "7821634",
-        "29366489",
-        "25973484",
-        "21439640",
-        "17648235",
-        "4429932",
-        "15721252",
         "8963413",
-        "32001951"
+        "15113221",
+        "42731834",
+        "20839751",
+        "11271123",
+        "32001951",
+        "26561572",
+        "20280410",
+        "18734652"
       ],
-      "advanced_recall@5": 1.0,
-      "advanced_recall@10": 1.0,
-      "advanced_time": 1.007
+      "dense_recall@5": 1.0,
+      "dense_recall@10": 1.0,
+      "dense_time": 0.157,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
+        "45638119",
+        "8963413",
+        "15113221",
+        "4429932",
+        "20839751",
+        "2931832",
+        "32001951",
+        "16701509",
+        "24341590",
+        "42731834"
+      ],
+      "rerank_recall@5": 1.0,
+      "rerank_recall@10": 1.0,
+      "rerank_time": 3.024
     },
     {
       "query_id": "54",
@@ -460,38 +461,38 @@
       "gold_ids": [
         "49556906"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
-        "49556906",
-        "3973445",
+      "dense_retrieved": 10,
+      "dense_ids": [
         "1590744",
         "24721866",
-        "38533515",
-        "5172048",
-        "2272614",
-        "22621251",
-        "3419709",
-        "28712203"
-      ],
-      "traditional_recall@5": 1.0,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.018,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
+        "9899292",
         "49556906",
         "3973445",
-        "1590744",
-        "5172048",
-        "22621251",
-        "24721866",
         "9752604",
+        "3419709",
         "19313533",
-        "5573975",
-        "26025820"
+        "23974474",
+        "5172048"
       ],
-      "advanced_recall@5": 1.0,
-      "advanced_recall@10": 1.0,
-      "advanced_time": 1.01
+      "dense_recall@5": 1.0,
+      "dense_recall@10": 1.0,
+      "dense_time": 0.166,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
+        "49556906",
+        "19313533",
+        "3973445",
+        "23974474",
+        "1590744",
+        "9752604",
+        "24721866",
+        "9899292",
+        "7005276",
+        "32408470"
+      ],
+      "rerank_recall@5": 1.0,
+      "rerank_recall@10": 1.0,
+      "rerank_time": 3.557
     },
     {
       "query_id": "56",
@@ -500,38 +501,38 @@
       "gold_ids": [
         "4709641"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
+      "dense_retrieved": 10,
+      "dense_ids": [
         "4709641",
         "22185730",
-        "22116439",
-        "15347087",
-        "6492658",
-        "18852643",
-        "18038250",
-        "20937018",
-        "3140772",
-        "30351165"
-      ],
-      "traditional_recall@5": 1.0,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.015,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
-        "4709641",
-        "22185730",
+        "3113630",
         "4345605",
-        "35520219",
+        "6492658",
+        "7039855",
+        "1447990",
+        "58006489",
         "22116439",
+        "28530299"
+      ],
+      "dense_recall@5": 1.0,
+      "dense_recall@10": 1.0,
+      "dense_time": 0.168,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
+        "4709641",
+        "22116439",
+        "22185730",
         "3140772",
         "6492658",
-        "4459491",
-        "7039855",
-        "10790846"
+        "1122198",
+        "28530299",
+        "35520219",
+        "3113630",
+        "35777860"
       ],
-      "advanced_recall@5": 1.0,
-      "advanced_recall@10": 1.0,
-      "advanced_time": 1.332
+      "rerank_recall@5": 1.0,
+      "rerank_recall@10": 1.0,
+      "rerank_time": 3.673
     },
     {
       "query_id": "57",
@@ -540,38 +541,38 @@
       "gold_ids": [
         "4709641"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
+      "dense_retrieved": 10,
+      "dense_ids": [
         "4709641",
         "22185730",
-        "22116439",
-        "15347087",
-        "6492658",
-        "18852643",
-        "20937018",
-        "18038250",
+        "1447990",
+        "58006489",
         "30351165",
-        "3140772"
+        "35777860",
+        "3113630",
+        "7039855",
+        "21199527",
+        "22116439"
       ],
-      "traditional_recall@5": 1.0,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.015,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
+      "dense_recall@5": 1.0,
+      "dense_recall@10": 1.0,
+      "dense_time": 0.158,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
         "4709641",
         "22185730",
-        "4345605",
-        "35520219",
         "22116439",
-        "3140772",
-        "6492658",
-        "4459491",
+        "30351165",
+        "11674288",
+        "1122198",
+        "20937018",
+        "11659421",
         "7039855",
-        "10790846"
+        "27588420"
       ],
-      "advanced_recall@5": 1.0,
-      "advanced_recall@10": 1.0,
-      "advanced_time": 1.304
+      "rerank_recall@5": 1.0,
+      "rerank_recall@10": 1.0,
+      "rerank_time": 3.71
     },
     {
       "query_id": "70",
@@ -581,38 +582,38 @@
         "4414547",
         "5956380"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
-        "9483851",
-        "27949347",
-        "11903247",
-        "6896063",
-        "28107602",
-        "31624828",
+      "dense_retrieved": 10,
+      "dense_ids": [
         "9169645",
-        "21557055",
-        "37204802",
-        "14460402"
-      ],
-      "traditional_recall@5": 0.0,
-      "traditional_recall@10": 0.0,
-      "traditional_time": 0.013,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
-        "11903247",
-        "4414547",
-        "9169645",
-        "4389394",
-        "14460402",
         "43880096",
-        "23985464",
-        "5254463",
-        "27949347",
-        "31624828"
+        "9483851",
+        "35684881",
+        "11903247",
+        "42489926",
+        "5956380",
+        "31624828",
+        "2582169",
+        "21557055"
       ],
-      "advanced_recall@5": 0.5,
-      "advanced_recall@10": 0.5,
-      "advanced_time": 0.778
+      "dense_recall@5": 0.0,
+      "dense_recall@10": 0.5,
+      "dense_time": 0.132,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
+        "11903247",
+        "43880096",
+        "9483851",
+        "4389394",
+        "35684881",
+        "21557055",
+        "21307488",
+        "42489926",
+        "31624828",
+        "2582169"
+      ],
+      "rerank_recall@5": 0.0,
+      "rerank_recall@10": 0.0,
+      "rerank_time": 3.349
     },
     {
       "query_id": "72",
@@ -621,38 +622,38 @@
       "gold_ids": [
         "6076903"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
+      "dense_retrieved": 10,
+      "dense_ids": [
+        "14362678",
         "6076903",
-        "8997410",
+        "1070920",
+        "19313533",
+        "14296612",
         "2119889",
-        "14492964",
-        "25970224",
-        "5700349",
-        "1686881",
-        "19485649",
-        "38380061",
-        "34735369"
+        "40790033",
+        "27428509",
+        "20888849",
+        "4469125"
       ],
-      "traditional_recall@5": 1.0,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.014,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
+      "dense_recall@5": 1.0,
+      "dense_recall@10": 1.0,
+      "dense_time": 0.153,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
         "6076903",
-        "25970224",
-        "2119889",
-        "2335873",
-        "20313748",
-        "1686881",
-        "12631697",
-        "14492964",
-        "20544428",
-        "16511863"
+        "27428509",
+        "40790033",
+        "14296612",
+        "118568",
+        "25440070",
+        "3866315",
+        "19313533",
+        "1070920",
+        "25251625"
       ],
-      "advanced_recall@5": 1.0,
-      "advanced_recall@10": 1.0,
-      "advanced_time": 1.331
+      "rerank_recall@5": 1.0,
+      "rerank_recall@10": 1.0,
+      "rerank_time": 3.574
     },
     {
       "query_id": "75",
@@ -661,38 +662,38 @@
       "gold_ids": [
         "4387784"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
-        "37768883",
+      "dense_retrieved": 10,
+      "dense_ids": [
         "4387784",
+        "13965483",
         "36233757",
+        "12149169",
+        "2837758",
+        "29224825",
+        "26488879",
+        "22703082",
         "29214508",
+        "37768883"
+      ],
+      "dense_recall@5": 1.0,
+      "dense_recall@10": 1.0,
+      "dense_time": 0.161,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
+        "4387784",
         "25657127",
         "13965483",
-        "44947611",
+        "26488879",
+        "22703082",
+        "29224825",
         "2099400",
-        "26488879",
-        "1744752"
-      ],
-      "traditional_recall@5": 1.0,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.014,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
-        "4387784",
         "36233757",
-        "13965483",
-        "44947611",
-        "25657127",
-        "26488879",
-        "29214508",
         "37768883",
-        "38805486",
-        "20330519"
+        "29214508"
       ],
-      "advanced_recall@5": 1.0,
-      "advanced_recall@10": 1.0,
-      "advanced_time": 1.185
+      "rerank_recall@5": 1.0,
+      "rerank_recall@10": 1.0,
+      "rerank_time": 4.096
     },
     {
       "query_id": "94",
@@ -701,38 +702,38 @@
       "gold_ids": [
         "1215116"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
-        "18321590",
-        "20428155",
-        "1215116",
+      "dense_retrieved": 10,
+      "dense_ids": [
+        "25298276",
+        "33118292",
+        "32850528",
+        "12370881",
+        "24346598",
+        "19205326",
+        "32001951",
+        "3613041",
+        "39892135",
+        "8428837"
+      ],
+      "dense_recall@5": 0.0,
+      "dense_recall@10": 0.0,
+      "dense_time": 0.129,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
+        "3419709",
         "6503185",
-        "39424916",
-        "11441172",
-        "10617916",
-        "84085333",
-        "10703001",
-        "35768199"
+        "39892135",
+        "25643818",
+        "19205326",
+        "3613041",
+        "46765242",
+        "12370881",
+        "27944135",
+        "8428837"
       ],
-      "traditional_recall@5": 1.0,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.013,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
-        "1215116",
-        "20428155",
-        "39424916",
-        "18321590",
-        "11441172",
-        "46602807",
-        "10617916",
-        "14657344",
-        "10703001",
-        "12801438"
-      ],
-      "advanced_recall@5": 1.0,
-      "advanced_recall@10": 1.0,
-      "advanced_time": 1.358
+      "rerank_recall@5": 0.0,
+      "rerank_recall@10": 0.0,
+      "rerank_time": 3.44
     },
     {
       "query_id": "99",
@@ -741,38 +742,38 @@
       "gold_ids": [
         "18810195"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
-        "20313748",
-        "18810195",
+      "dense_retrieved": 10,
+      "dense_ids": [
         "11083121",
-        "16270577",
-        "3610282",
-        "10504681",
-        "30208015",
-        "2443495",
-        "8093935",
-        "25388309"
-      ],
-      "traditional_recall@5": 1.0,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.017,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
-        "18810195",
-        "30208015",
         "21754541",
-        "20313748",
-        "2443495",
-        "6974477",
-        "12922760",
-        "19752008",
-        "12225214",
-        "33720691"
+        "13492264",
+        "2576811",
+        "31154082",
+        "3506723",
+        "1744752",
+        "25942757",
+        "18810195",
+        "40383969"
       ],
-      "advanced_recall@5": 1.0,
-      "advanced_recall@10": 1.0,
-      "advanced_time": 1.263
+      "dense_recall@5": 0.0,
+      "dense_recall@10": 1.0,
+      "dense_time": 0.153,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
+        "18810195",
+        "43224840",
+        "350542",
+        "25942757",
+        "31154082",
+        "20313748",
+        "43711341",
+        "323030",
+        "24928817",
+        "11083121"
+      ],
+      "rerank_recall@5": 1.0,
+      "rerank_recall@10": 1.0,
+      "rerank_time": 3.411
     },
     {
       "query_id": "100",
@@ -781,38 +782,38 @@
       "gold_ids": [
         "4381486"
       ],
-      "traditional_retrieved": 10,
-      "traditional_ids": [
-        "34982259",
+      "dense_retrieved": 10,
+      "dense_ids": [
+        "13116880",
+        "25516011",
+        "4381486",
+        "92499",
         "14550841",
-        "4381486",
-        "25516011",
-        "5415832",
-        "92499",
-        "13116880",
-        "9154703",
-        "1944452",
-        "11020675"
+        "12742164",
+        "11360430",
+        "4421787",
+        "17601006",
+        "2547636"
       ],
-      "traditional_recall@5": 1.0,
-      "traditional_recall@10": 1.0,
-      "traditional_time": 0.014,
-      "advanced_retrieved": 10,
-      "advanced_ids": [
+      "dense_recall@5": 1.0,
+      "dense_recall@10": 1.0,
+      "dense_time": 0.155,
+      "rerank_retrieved": 10,
+      "rerank_ids": [
         "4381486",
-        "34982259",
-        "5415832",
+        "13116880",
+        "92499",
+        "11360430",
+        "2701077",
         "22186938",
+        "14550841",
+        "13980338",
         "25516011",
-        "92499",
-        "13116880",
-        "7583161",
-        "42787108",
-        "11020675"
+        "4421787"
       ],
-      "advanced_recall@5": 1.0,
-      "advanced_recall@10": 1.0,
-      "advanced_time": 0.948
+      "rerank_recall@5": 1.0,
+      "rerank_recall@10": 1.0,
+      "rerank_time": 3.221
     }
   ]
 }

@@ -1,0 +1,56 @@
+{
+  "test_config": {
+    "total_queries": 9,
+    "real_search_queries": 2,
+    "bad_queries": [
+      "Find me papers about transformer attention mechanism",
+      "Search for recent articles about graph neural networks",
+      "I need to find some research papers on deep reinforcement learning",
+      "Can you search for the latest publications about diffusion models",
+      "Please find any papers related to large language model evaluation",
+      "Attention Is All You Need Vaswani 2017 transformer architecture self-attention multi-head attention positional encoding",
+      "An image is worth 16x16 words transformers for image recognition at scale dosovitskiy",
+      "请搜索关于Transformer注意力机制的最新研究论文",
+      "深度学习在自然语言处理中的应用研究综述"
+    ]
+  },
+  "text_optimization": {
+    "modification_rate_pct": 44.4,
+    "modified": 4,
+    "total": 9,
+    "bilingual_generated": 0,
+    "avg_orig_len": 61.4,
+    "avg_opt_len": 53.0,
+    "length_reduction_pct": 13.7
+  },
+  "zero_result_rescue": {
+    "records": [
+      {
+        "query": "Find me papers about transformer attention mechanism",
+        "without_opt_count": 5,
+        "without_opt_time": 10.49,
+        "with_opt_count": 5,
+        "with_opt_time": 31.55,
+        "was_empty_without": false,
+        "was_empty_with": false
+      },
+      {
+        "query": "请搜索关于Transformer注意力机制的最新研究论文",
+        "without_opt_count": 5,
+        "without_opt_time": 72.61,
+        "with_opt_count": 5,
+        "with_opt_time": 91.56,
+        "was_empty_without": false,
+        "was_empty_with": false
+      }
+    ],
+    "empty_without": 0,
+    "empty_with": 0,
+    "rescued": 0,
+    "total_papers_without": 10,
+    "total_papers_with": 10,
+    "paper_coverage_ratio": 1.0,
+    "avg_time_without": 41.55,
+    "avg_time_with": 61.55
+  }
+}
